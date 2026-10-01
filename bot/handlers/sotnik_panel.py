@@ -11,7 +11,9 @@ from bot.keyboards.inline_helpers import get_back_kb
 from bot.keyboards.main_menu import get_main_keyboard
 from config import settings
 import texts
+import logging
 
+logger = logging.getLogger("CO:LIVE.sotnik")
 router = Router()
 
 async def render_sotnik_panel(message_or_call, tg_id: int):
@@ -73,12 +75,14 @@ async def cb_pending_list(call: CallbackQuery):
             await call.answer("Немає нових заявок у черзі!", show_alert=True)
             return
 
-        await call.message.answer(f"📥 **Список очікуючих заявок ({len(requests)}):**")
+        await call.message.answer(f"📥 <b>Список очікуючих заявок ({len(requests)}):</b>")
         for req in requests:
             username_str = f"@{req.username}" if req.username else "без username"
+            role_label = "👑 Заявка на СОТНИКА" if getattr(req, "target_role", "RESIDENT") == "SOTNIK" else "🙋‍♂️ Заявка мешканця"
             card_text = (
-                f"👤 **{req.full_name}** ({username_str})\n"
-                f"🚪 Обрана кімната: **{req.room.name if req.room else 'Невідомо'}**\n"
+                f"{role_label}\n"
+                f"👤 <b>{req.full_name}</b> ({username_str})\n"
+                f"🚪 Обрана кімната: <b>{req.room.name if req.room else 'Невідомо'}</b>\n"
                 f"🕒 Дата подачі: {req.created_at.strftime('%d.%m %H:%M')}"
             )
             await call.message.answer(card_text, reply_markup=get_request_action_kb(req.id))
@@ -106,19 +110,21 @@ async def cb_approve_request(call: CallbackQuery):
 
         # Сповіщаємо мешканця
         try:
+            is_sotnik = (approved_user.role == "SOTNIK")
+            notif_text = texts.REQUEST_APPROVED_SOTNIK_NOTIF_USER if is_sotnik else texts.REQUEST_APPROVED_NOTIF_USER
             webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={approved_user.telegram_id}&coliving_id={coliving.id}"
             await call.bot.send_message(
                 chat_id=approved_user.telegram_id,
-                text=texts.REQUEST_APPROVED_NOTIF_USER.format(
+                text=notif_text.format(
                     coliving_name=coliving.name,
                     room_name=room.name if room else ""
                 ),
-                reply_markup=get_main_keyboard(is_sotnik=False, webapp_url=webapp_url)
+                reply_markup=get_main_keyboard(is_sotnik=is_sotnik, webapp_url=webapp_url)
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not notify approved user {approved_user.telegram_id}: {e}")
 
-    await call.message.edit_text(f"✅ Заявку користувача **{req.full_name}** схвалено!")
+    await call.message.edit_text(f"✅ Заявку користувача <b>{req.full_name}</b> схвалено!")
     await call.answer()
 
 # Відхилення заявки
@@ -133,9 +139,9 @@ async def cb_reject_request(call: CallbackQuery):
                     chat_id=req.telegram_id,
                     text=texts.REQUEST_REJECTED_NOTIF_USER
                 )
-            except Exception:
-                pass
-            await call.message.edit_text(f"❌ Заявку **{req.full_name}** відхилено.")
+            except Exception as e:
+                logger.warning(f"Could not notify rejected user: {e}")
+            await call.message.edit_text(f"❌ Заявку <b>{req.full_name}</b> відхилено.")
         else:
             await call.answer("Заявка вже оброблена.", show_alert=True)
     await call.answer()
@@ -152,9 +158,9 @@ async def cb_block_request(call: CallbackQuery):
                     chat_id=req.telegram_id,
                     text="⛔ Вам відмовлено у доступі до колівінгу та додано до чорного списку."
                 )
-            except Exception:
-                pass
-            await call.message.edit_text(f"🚫 Користувача **{req.full_name}** заблоковано!")
+            except Exception as e:
+                logger.warning(f"Could not notify blocked user: {e}")
+            await call.message.edit_text(f"🚫 Користувача <b>{req.full_name}</b> заблоковано!")
         else:
             await call.answer("Заявка вже оброблена.", show_alert=True)
     await call.answer()
@@ -180,8 +186,14 @@ async def cb_get_invite_text(call: CallbackQuery):
         user = await crud.get_user_by_tg_id(session, tg_id)
         coliving = await crud.get_coliving_by_id(session, user.coliving_id)
 
-    bot_info = await call.bot.get_me()
-    invite_link = f"https://t.me/{bot_info.username}?start=join_{coliving.invite_code}"
+    bot_username = "colive_bot"
+    try:
+        bot_info = await call.bot.get_me()
+        bot_username = bot_info.username or bot_username
+    except Exception:
+        pass
+
+    invite_link = f"https://t.me/{bot_username}?start=join_{coliving.invite_code}"
 
     text = texts.INVITE_FORWARD_TEMPLATE.format(
         coliving_name=coliving.name,
@@ -200,7 +212,7 @@ async def cb_get_raw_code(call: CallbackQuery):
         coliving = await crud.get_coliving_by_id(session, user.coliving_id)
 
     await call.message.answer(
-        f"🔑 Код вашого колівінгу для ручного вводу: `{coliving.invite_code}`",
+        f"🔑 Код вашого колівінгу для ручного вводу: <code>{coliving.invite_code}</code>",
         reply_markup=get_back_kb("sotnik_back_panel", "◀️ Назад до панелі")
     )
     await call.answer()
@@ -242,8 +254,13 @@ async def cb_regen_code(call: CallbackQuery):
         user = await crud.get_user_by_tg_id(session, tg_id)
         new_code = await crud.regenerate_coliving_code(session, user.coliving_id)
 
-    bot_info = await call.bot.get_me()
-    new_link = f"https://t.me/{bot_info.username}?start=join_{new_code}"
+    bot_username = "colive_bot"
+    try:
+        bot_info = await call.bot.get_me()
+        bot_username = bot_info.username or bot_username
+    except Exception:
+        pass
+    new_link = f"https://t.me/{bot_username}?start=join_{new_code}"
 
     await call.message.answer(
         texts.CODE_REGENERATED_MSG.format(new_code=new_code, new_link=new_link),
@@ -260,11 +277,11 @@ async def cb_group_guide(call: CallbackQuery):
         coliving = await crud.get_coliving_by_id(session, user.coliving_id)
 
     guide_text = (
-        "💬 **Як підключити груповий чат колівінгу:**\n\n"
+        "💬 <b>Як підключити груповий чат колівінгу:</b>\n\n"
         "1. Додайте бота до вашої групи або супергрупи колівінгу;\n"
         "2. Надайте боту права адміністратора (для надсилання повідомлень у топіки);\n"
         f"3. У групі (або в потрібному топіку «Чергування») напишіть команду:\n"
-        f"`/link_group {coliving.invite_code}`\n\n"
+        f"<code>/link_group {coliving.invite_code}</code>\n\n"
         "Після цього бот автоматично надсилатиме щотижневі графіки та термінові сповіщення саме туди!"
     )
     await call.message.answer(guide_text, reply_markup=get_back_kb("sotnik_back_panel", "◀️ Назад до панелі"))

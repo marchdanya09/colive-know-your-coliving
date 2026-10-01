@@ -21,7 +21,10 @@ def generate_invite_code(length: int = 9) -> str:
 async def get_user_by_tg_id(session: AsyncSession, tg_id: int) -> Optional[User]:
     stmt = (
         select(User)
-        .options(selectinload(User.coliving), selectinload(User.room))
+        .options(
+            selectinload(User.coliving).selectinload(Coliving.rooms),
+            selectinload(User.room)
+        )
         .where(User.telegram_id == tg_id)
     )
     result = await session.execute(stmt)
@@ -226,7 +229,8 @@ async def create_join_request(
     room_id: int,
     tg_id: int,
     full_name: str,
-    username: Optional[str]
+    username: Optional[str],
+    target_role: str = "RESIDENT"
 ) -> JoinRequest:
     req = JoinRequest(
         coliving_id=coliving_id,
@@ -234,6 +238,7 @@ async def create_join_request(
         telegram_id=tg_id,
         full_name=full_name,
         username=username,
+        target_role=target_role,
         status="PENDING"
     )
     session.add(req)
@@ -260,6 +265,12 @@ async def approve_request(session: AsyncSession, request_id: int) -> Optional[Tu
 
     req.status = "APPROVED"
 
+    assigned_role = req.target_role or "RESIDENT"
+    if assigned_role == "SOTNIK":
+        sotniks = await get_sotniks(session, req.coliving_id)
+        if len(sotniks) >= settings.MAX_SOTNIKS_PER_COLIVING:
+            assigned_role = "RESIDENT"
+
     # Створюємо чи оновлюємо користувача
     user = await get_user_by_tg_id(session, req.telegram_id)
     if not user:
@@ -267,7 +278,7 @@ async def approve_request(session: AsyncSession, request_id: int) -> Optional[Tu
             telegram_id=req.telegram_id,
             full_name=req.full_name,
             username=req.username,
-            role="RESIDENT",
+            role=assigned_role,
             coliving_id=req.coliving_id,
             room_id=req.room_id,
             is_approved=True
@@ -278,6 +289,7 @@ async def approve_request(session: AsyncSession, request_id: int) -> Optional[Tu
         user.username = req.username
         user.coliving_id = req.coliving_id
         user.room_id = req.room_id
+        user.role = assigned_role
         user.is_approved = True
 
     await session.commit()

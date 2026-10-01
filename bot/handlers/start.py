@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
@@ -16,7 +16,9 @@ from bot.keyboards.inline_helpers import (
 )
 from config import settings
 import texts
+import logging
 
+logger = logging.getLogger("CO:LIVE.start")
 router = Router()
 
 class ColivingWizard(StatesGroup):
@@ -30,6 +32,11 @@ class ResidentJoinState(StatesGroup):
     waiting_for_name = State()
     waiting_for_room = State()
 
+class SotnikJoinState(StatesGroup):
+    waiting_for_code = State()
+    waiting_for_name = State()
+    waiting_for_room = State()
+
 @router.message(CommandStart())
 async def handle_start(message: Message, command: CommandObject, state: FSMContext):
     await state.clear()
@@ -39,15 +46,15 @@ async def handle_start(message: Message, command: CommandObject, state: FSMConte
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
 
-        # Якщо вже є затвердженим мешканцем колівінгу
+        # Якщо вже є затвердженим мешканцем або сотником
         if user and user.is_approved and user.coliving_id:
             coliving = await crud.get_coliving_by_id(session, user.coliving_id)
             is_sotnik = (user.role == "SOTNIK")
             webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={tg_id}&coliving_id={user.coliving_id}"
             await message.answer(
-                f"👋 З поверненням, **{user.full_name}**!\n"
-                f"🏢 Колівінг: **{coliving.name if coliving else ''}**\n"
-                f"🚪 Кімната: **{user.room.name if user.room else 'Не призначено'}**",
+                f"👋 З поверненням, <b>{user.full_name}</b>!\n"
+                f"🏢 Колівінг: <b>{coliving.name if coliving else ''}</b>\n"
+                f"🚪 Кімната: <b>{user.room.name if user.room else 'Не призначено'}</b>",
                 reply_markup=get_main_keyboard(is_sotnik=is_sotnik, webapp_url=webapp_url)
             )
             return
@@ -55,7 +62,7 @@ async def handle_start(message: Message, command: CommandObject, state: FSMConte
         # Якщо є аргумент deep-link (напр. ?start=join_XXXXX або ?start=XXXXX)
         if args:
             code = args.replace("join_", "").strip()
-            await proceed_with_code(message, state, code)
+            await proceed_with_code(message, state, code, is_sotnik=False)
             return
 
     # Якщо новий користувач — показуємо вибір ролі
@@ -153,7 +160,12 @@ async def wizard_rooms(message: Message, state: FSMContext):
     full_name = message.from_user.full_name or "Сотник"
     username = message.from_user.username
 
-    bot_info = await message.bot.get_me()
+    bot_username = "colive_bot"
+    try:
+        bot_info = await message.bot.get_me()
+        bot_username = bot_info.username or bot_username
+    except Exception as e:
+        logger.warning(f"Failed to fetch bot username: {e}")
 
     async with AsyncSessionLocal() as session:
         coliving, sotnik_user = await crud.create_coliving_with_rooms(
@@ -166,7 +178,7 @@ async def wizard_rooms(message: Message, state: FSMContext):
             creator_name=full_name,
             creator_username=username
         )
-        invite_link = f"https://t.me/{bot_info.username}?start=join_{coliving.invite_code}"
+        invite_link = f"https://t.me/{bot_username}?start=join_{coliving.invite_code}"
         webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={tg_id}&coliving_id={coliving.id}"
 
         await message.answer(
@@ -180,6 +192,114 @@ async def wizard_rooms(message: Message, state: FSMContext):
             ),
             reply_markup=get_main_keyboard(is_sotnik=True, webapp_url=webapp_url)
         )
+
+# ----------------- ПРИЄДНАННЯ СОТНИКА ДО НАЯВНОГО -----------------
+
+@router.callback_query(F.data == "sotnik_join_existing")
+async def cb_sotnik_join_existing(call: CallbackQuery, state: FSMContext):
+    await state.set_state(SotnikJoinState.waiting_for_code)
+    await call.message.edit_text(
+        texts.SOTNIK_ENTER_CODE_PROMPT,
+        reply_markup=get_back_kb("sotnik_back_to_choice")
+    )
+    await call.answer()
+
+@router.message(SotnikJoinState.waiting_for_code)
+async def process_sotnik_code(message: Message, state: FSMContext):
+    code = message.text.strip()
+    await proceed_with_code(message, state, code, is_sotnik=True)
+
+@router.callback_query(F.data == "sotnik_join_back_to_code")
+async def cb_sotnik_join_back_to_code(call: CallbackQuery, state: FSMContext):
+    await state.set_state(SotnikJoinState.waiting_for_code)
+    await call.message.edit_text(
+        texts.SOTNIK_ENTER_CODE_PROMPT,
+        reply_markup=get_back_kb("sotnik_back_to_choice")
+    )
+    await call.answer()
+
+@router.message(SotnikJoinState.waiting_for_name)
+async def sotnik_entered_name(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name or len(name) > 100:
+        await message.answer("⚠️ Введіть коректне Прізвище та Ім'я:", reply_markup=get_back_kb("sotnik_join_back_to_code"))
+        return
+
+    await state.update_data(full_name=name)
+    data = await state.get_data()
+    coliving_id = data["coliving_id"]
+
+    async with AsyncSessionLocal() as session:
+        rooms = await crud.get_rooms_with_users(session, coliving_id)
+        text_lines = ["🚪 <b>Оберіть кімнату, в якій ви будете проживати:</b>\n"]
+        for r in rooms:
+            users_str = ", ".join([u.full_name for u in r.users]) if r.users else "порожня"
+            count = len(r.users) if r.users else 0
+            text_lines.append(f"🚪 <b>{r.name}</b> ({count}/{r.capacity}): <i>{users_str}</i>")
+
+        await state.set_state(SotnikJoinState.waiting_for_room)
+        await message.answer("\n".join(text_lines), reply_markup=get_rooms_selection_kb(rooms, back_callback="sotnik_join_back_to_name"))
+
+@router.callback_query(F.data == "sotnik_join_back_to_name")
+async def cb_sotnik_join_back_to_name(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    coliving_name = data.get("coliving_name", "")
+    address = data.get("coliving_addr", "")
+    await state.set_state(SotnikJoinState.waiting_for_name)
+    await call.message.edit_text(
+        texts.RESIDENT_FULLNAME_PROMPT.format(coliving_name=coliving_name, address=address),
+        reply_markup=get_back_kb("sotnik_join_back_to_code")
+    )
+    await call.answer()
+
+@router.callback_query(SotnikJoinState.waiting_for_room, F.data.startswith("select_room_"))
+async def sotnik_selected_room(call: CallbackQuery, state: FSMContext):
+    room_id = int(call.data.replace("select_room_", ""))
+    data = await state.get_data()
+    coliving_id = data["coliving_id"]
+    full_name = data["full_name"]
+    await state.clear()
+
+    tg_id = call.from_user.id
+    username = call.from_user.username
+
+    async with AsyncSessionLocal() as session:
+        room = await crud.get_room_by_id(session, room_id)
+        coliving = await crud.get_coliving_by_id(session, coliving_id)
+        sotniks = await crud.get_sotniks(session, coliving_id)
+
+        # Створюємо заявку з ролью SOTNIK
+        req = await crud.create_join_request(
+            session=session,
+            coliving_id=coliving_id,
+            room_id=room_id,
+            tg_id=tg_id,
+            full_name=full_name,
+            username=username,
+            target_role="SOTNIK"
+        )
+
+        await call.message.edit_text(
+            texts.SOTNIK_REQUEST_SUBMITTED.format(room_name=room.name if room else "")
+        )
+        await call.answer()
+
+        # Надсилаємо сповіщення всім діючим Сотникам
+        for s in sotniks:
+            try:
+                await call.bot.send_message(
+                    chat_id=s.telegram_id,
+                    text=texts.SOTNIK_NEW_SOTNIK_REQUEST_NOTIFICATION.format(
+                        full_name=full_name,
+                        username=f"@{username}" if username else "без username",
+                        room_name=room.name if room else "",
+                        coliving_name=coliving.name if coliving else "",
+                        sotniks_count=len(sotniks)
+                    ),
+                    reply_markup=get_request_action_kb(req.id)
+                )
+            except Exception:
+                pass
 
 # ----------------- ГІЛКА МЕШКАНЦЯ -----------------
 
@@ -195,14 +315,16 @@ async def cb_role_resident(call: CallbackQuery, state: FSMContext):
 @router.message(ResidentJoinState.waiting_for_code)
 async def process_entered_code(message: Message, state: FSMContext):
     code = message.text.strip()
-    await proceed_with_code(message, state, code)
+    await proceed_with_code(message, state, code, is_sotnik=False)
 
-async def proceed_with_code(message: Message, state: FSMContext, code: str):
+async def proceed_with_code(message: Message, state: FSMContext, code: str, is_sotnik: bool = False):
     tg_id = message.from_user.id
+
+    back_cb = "sotnik_back_to_choice" if is_sotnik else "role_back_to_start"
 
     # 1. Перевірка блокування через підбір коду
     if rate_limiter.is_code_locked(tg_id):
-        await message.answer(texts.CODE_ATTEMPTS_EXCEEDED, reply_markup=get_back_kb("role_back_to_start"))
+        await message.answer(texts.CODE_ATTEMPTS_EXCEEDED, reply_markup=get_back_kb(back_cb))
         return
 
     async with AsyncSessionLocal() as session:
@@ -218,9 +340,9 @@ async def proceed_with_code(message: Message, state: FSMContext, code: str):
         if not coliving:
             is_locked = rate_limiter.record_failed_code_attempt(tg_id)
             if is_locked:
-                await message.answer(texts.CODE_ATTEMPTS_EXCEEDED, reply_markup=get_back_kb("role_back_to_start"))
+                await message.answer(texts.CODE_ATTEMPTS_EXCEEDED, reply_markup=get_back_kb(back_cb))
             else:
-                await message.answer(texts.CODE_NOT_FOUND, reply_markup=get_back_kb("role_back_to_start"))
+                await message.answer(texts.CODE_NOT_FOUND, reply_markup=get_back_kb(back_cb))
             return
 
         # 4. Перевірка чорного списку
@@ -228,37 +350,54 @@ async def proceed_with_code(message: Message, state: FSMContext, code: str):
             await message.answer(texts.YOU_ARE_BLACKLISTED)
             return
 
-        # 5. Перевірка блокування прийому заявок сотником
+        # 5. Якщо намагається зайти як сотник — перевірка ліміту 3 сотників
+        if is_sotnik:
+            sotniks = await crud.get_sotniks(session, coliving.id)
+            if len(sotniks) >= settings.MAX_SOTNIKS_PER_COLIVING:
+                limit_kb = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="🙋‍♂️ Приєднатися як мешканець", callback_data="role_resident")],
+                        [InlineKeyboardButton(text="◀️ Назад", callback_data="sotnik_back_to_choice")]
+                    ]
+                )
+                await message.answer(texts.SOTNIK_LIMIT_REACHED.format(coliving_name=coliving.name, count=len(sotniks)), reply_markup=limit_kb)
+                return
+
+        # 6. Перевірка блокування прийому заявок сотником
         if coliving.is_join_locked:
-            await message.answer(texts.REGISTRATION_LOCKED, reply_markup=get_back_kb("role_back_to_start"))
+            await message.answer(texts.REGISTRATION_LOCKED, reply_markup=get_back_kb(back_cb))
             return
 
-        # 6. Перевірка місткості колівінгу (макс 50)
+        # 7. Перевірка місткості колівінгу (макс 50)
         curr_residents = await crud.count_residents(session, coliving.id)
         if curr_residents >= coliving.total_people or curr_residents >= settings.MAX_PEOPLE_PER_COLIVING:
-            await message.answer(texts.COLIVING_FULL, reply_markup=get_back_kb("role_back_to_start"))
+            await message.answer(texts.COLIVING_FULL, reply_markup=get_back_kb(back_cb))
             return
 
-        # 7. Перевірка черги заявок (макс 30)
+        # 8. Перевірка черги заявок (макс 30)
         pending_count = await crud.count_pending_requests(session, coliving.id)
         if pending_count >= settings.MAX_PENDING_REQUESTS:
-            await message.answer(texts.QUEUE_FULL, reply_markup=get_back_kb("role_back_to_start"))
+            await message.answer(texts.QUEUE_FULL, reply_markup=get_back_kb(back_cb))
             return
 
-        # 8. Перевірка наявної активної заявки
+        # 9. Перевірка наявної активної заявки
         if await crud.has_active_request(session, tg_id):
             await message.answer("⚠️ У вас вже є активна заявка на розгляд сотником. Будь ласка, зачекайте.")
             return
 
         # Зберігаємо ID колівінгу в FSM
         await state.update_data(coliving_id=coliving.id, coliving_name=coliving.name, coliving_addr=coliving.address)
-        await state.set_state(ResidentJoinState.waiting_for_name)
+        
+        target_state = SotnikJoinState.waiting_for_name if is_sotnik else ResidentJoinState.waiting_for_name
+        back_action = "sotnik_join_back_to_code" if is_sotnik else "join_back_to_code"
+
+        await state.set_state(target_state)
         await message.answer(
             texts.RESIDENT_FULLNAME_PROMPT.format(
                 coliving_name=coliving.name,
                 address=coliving.address
             ),
-            reply_markup=get_back_kb("join_back_to_code")
+            reply_markup=get_back_kb(back_action)
         )
 
 @router.callback_query(F.data == "join_back_to_code")
@@ -289,10 +428,10 @@ async def resident_entered_name(message: Message, state: FSMContext):
         for r in rooms:
             users_str = ", ".join([u.full_name for u in r.users]) if r.users else "порожня"
             count = len(r.users) if r.users else 0
-            text_lines.append(f"🚪 **{r.name}** ({count}/{r.capacity}): _{users_str}_")
+            text_lines.append(f"🚪 <b>{r.name}</b> ({count}/{r.capacity}): <i>{users_str}</i>")
 
         await state.set_state(ResidentJoinState.waiting_for_room)
-        await message.answer("\n".join(text_lines), reply_markup=get_rooms_selection_kb(rooms))
+        await message.answer("\n".join(text_lines), reply_markup=get_rooms_selection_kb(rooms, back_callback="join_back_to_name"))
 
 @router.callback_query(F.data == "join_back_to_name")
 async def cb_join_back_to_name(call: CallbackQuery, state: FSMContext):
@@ -324,14 +463,15 @@ async def resident_selected_room(call: CallbackQuery, state: FSMContext):
         room = await crud.get_room_by_id(session, room_id)
         coliving = await crud.get_coliving_by_id(session, coliving_id)
 
-        # Створюємо заявку
+        # Створюємо заявку з роллю RESIDENT
         req = await crud.create_join_request(
             session=session,
             coliving_id=coliving_id,
             room_id=room_id,
             tg_id=tg_id,
             full_name=full_name,
-            username=username
+            username=username,
+            target_role="RESIDENT"
         )
 
         # Повідомляємо кандидата

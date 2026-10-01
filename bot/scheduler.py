@@ -24,7 +24,7 @@ async def weekly_duty_rotation_task(bot: Bot):
 
                 duty_room = new_duty.room
                 tags = " ".join([
-                    f"@{u.username}" if u.username else f"[{u.full_name}](tg://user?id={u.telegram_id})"
+                    f"@{u.username}" if u.username else f'<a href="tg://user?id={u.telegram_id}">{u.full_name}</a>'
                     for u in duty_room.users
                 ]) if duty_room.users else "немає мешканців"
 
@@ -51,7 +51,7 @@ async def weekly_duty_rotation_task(bot: Bot):
                         await bot.send_message(
                             chat_id=member.telegram_id,
                             text=(
-                                f"🧹 **Увага! Ваша кімната ({duty_room.name}) заступає на чергування на цьому тижні!**\n\n"
+                                f"🧹 <b>Увага! Ваша кімната ({duty_room.name}) заступає на чергування на цьому тижні!</b>\n\n"
                                 f"Період: {new_duty.start_date.strftime('%d.%m')} - {new_duty.end_date.strftime('%d.%m')}\n\n"
                                 "Ознайомтесь з обов'язками чергових у меню «📋 Мої обов'язки». Тримаємо простір у чистоті!"
                             )

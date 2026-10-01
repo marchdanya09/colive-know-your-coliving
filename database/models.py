@@ -1,7 +1,10 @@
 from sqlalchemy import Column, Integer, BigInteger, String, Boolean, Float, ForeignKey, DateTime, Date, Text
 from sqlalchemy.orm import relationship
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from database.db import Base
+
+def utc_now():
+    return datetime.now(timezone.utc)
 
 class Coliving(Base):
     __tablename__ = "colivings"
@@ -21,7 +24,7 @@ class Coliving(Base):
     
     total_people = Column(Integer, default=16)
     total_rooms = Column(Integer, default=4)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     rooms = relationship("Room", back_populates="coliving", cascade="all, delete-orphan", order_by="Room.rotation_order")
     users = relationship("User", back_populates="coliving")
@@ -59,7 +62,7 @@ class User(Base):
     role = Column(String(20), default="RESIDENT")  # "SUPER_ADMIN", "SOTNIK", "RESIDENT"
     is_approved = Column(Boolean, default=False)
     unpaid_fines = Column(Float, default=0.0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     coliving = relationship("Coliving", back_populates="users")
     room = relationship("Room", back_populates="users")
@@ -76,8 +79,9 @@ class JoinRequest(Base):
     telegram_id = Column(BigInteger, index=True, nullable=False)
     full_name = Column(String(120), nullable=False)
     username = Column(String(100), nullable=True)
+    target_role = Column(String(20), default="RESIDENT")  # "RESIDENT" or "SOTNIK"
     status = Column(String(20), default="PENDING")  # "PENDING", "APPROVED", "REJECTED", "BLOCKED"
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     coliving = relationship("Coliving", back_populates="join_requests")
     room = relationship("Room")
@@ -107,7 +111,7 @@ class Complaint(Base):
     photo_file_id = Column(String(255), nullable=False)
     comment = Column(Text, nullable=True)
     status = Column(String(20), default="OPEN")  # "OPEN", "RESOLVED", "FINED"
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     coliving = relationship("Coliving", back_populates="complaints")
     reporter = relationship("User", back_populates="complaints_made")
@@ -125,7 +129,7 @@ class Fine(Base):
     amount = Column(Float, nullable=False)
     reason = Column(String(255), nullable=False)
     is_paid = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     coliving = relationship("Coliving", back_populates="fines")
     room = relationship("Room", back_populates="fines")
@@ -139,6 +143,6 @@ class Blacklist(Base):
     coliving_id = Column(Integer, ForeignKey("colivings.id"), nullable=False)
     telegram_id = Column(BigInteger, index=True, nullable=False)
     reason = Column(String(255), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     coliving = relationship("Coliving", back_populates="blacklist")

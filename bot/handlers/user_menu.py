@@ -53,7 +53,7 @@ async def menu_calendar(message: Message):
                         break
             for i in range(1, min(4, len(rooms))):
                 nxt = rooms[(cur_idx + i) % len(rooms)]
-                upcoming.append(f"• Наступний тиждень: **{nxt.name}**")
+                upcoming.append(f"• Наступний тиждень: <b>{nxt.name}</b>")
 
         upcoming_str = "\n".join(upcoming) if upcoming else "Графік формується"
 
@@ -90,7 +90,7 @@ async def menu_my_room(message: Message):
             role_badge = " (Сотник 👑)" if u.role == "SOTNIK" else ""
             me_badge = " (Ви)" if u.id == user.id else ""
             username_part = f" (@{u.username})" if u.username else ""
-            members_lines.append(f"• **{u.full_name}**{username_part}{role_badge}{me_badge}")
+            members_lines.append(f"• <b>{u.full_name}</b>{username_part}{role_badge}{me_badge}")
 
         sotniks_str = ", ".join([s.full_name for s in sotniks]) if sotniks else "не призначено"
 
@@ -279,7 +279,7 @@ async def complaint_comment(message: Message, state: FSMContext):
         # 2. Якщо прив'язана група — публікуємо в топік з тегами
         if coliving.group_chat_id:
             tags = " ".join([
-                f"@{u.username}" if u.username else f"[{u.full_name}](tg://user?id={u.telegram_id})"
+                f"@{u.username}" if u.username else f'<a href="tg://user?id={u.telegram_id}">{u.full_name}</a>'
                 for u in target_room.users
             ])
             try:
