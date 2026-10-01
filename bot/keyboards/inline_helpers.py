@@ -1,6 +1,20 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from typing import List
+from typing import List, Optional
 from database.models import Room
+
+def get_back_kb(callback_data: str, text: str = "◀️ Назад") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=text, callback_data=callback_data)]
+        ]
+    )
+
+def get_cancel_kb(callback_data: str, text: str = "❌ Скасувати") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=text, callback_data=callback_data)]
+        ]
+    )
 
 def get_rooms_selection_kb(rooms: List[Room]) -> InlineKeyboardMarkup:
     buttons = []
@@ -8,6 +22,8 @@ def get_rooms_selection_kb(rooms: List[Room]) -> InlineKeyboardMarkup:
         count = len(r.users) if r.users else 0
         btn_text = f"🚪 {r.name} ({count}/{r.capacity})"
         buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"select_room_{r.id}")])
+    # Додаємо кнопку Назад
+    buttons.append([InlineKeyboardButton(text="◀️ Назад до зміни імені", callback_data="join_back_to_name")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_my_room_actions_kb() -> InlineKeyboardMarkup:
@@ -42,6 +58,9 @@ def get_sotnik_start_choice_kb() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="🔗 Приєднатися як сотник за кодом", callback_data="role_resident")
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Назад до вибору ролі", callback_data="role_back_to_start")
             ]
         ]
     )

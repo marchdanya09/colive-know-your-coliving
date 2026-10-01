@@ -7,6 +7,7 @@ from bot.keyboards.sotnik_kb import (
     get_request_action_kb,
     get_add_member_kb
 )
+from bot.keyboards.inline_helpers import get_back_kb
 from bot.keyboards.main_menu import get_main_keyboard
 from config import settings
 import texts
@@ -81,6 +82,11 @@ async def cb_pending_list(call: CallbackQuery):
                 f"🕒 Дата подачі: {req.created_at.strftime('%d.%m %H:%M')}"
             )
             await call.message.answer(card_text, reply_markup=get_request_action_kb(req.id))
+
+        await call.message.answer(
+            "Натисніть кнопку нижче, щоб повернутися до панелі керування:",
+            reply_markup=get_back_kb("sotnik_back_panel", "◀️ Назад до панелі сотника")
+        )
 
     await call.answer()
 
@@ -183,7 +189,7 @@ async def cb_get_invite_text(call: CallbackQuery):
         invite_link=invite_link,
         code=coliving.invite_code
     )
-    await call.message.answer(text)
+    await call.message.answer(text, reply_markup=get_back_kb("sotnik_back_panel", "◀️ Назад до панелі"))
     await call.answer()
 
 @router.callback_query(F.data == "sotnik_get_raw_code")
@@ -193,7 +199,10 @@ async def cb_get_raw_code(call: CallbackQuery):
         user = await crud.get_user_by_tg_id(session, tg_id)
         coliving = await crud.get_coliving_by_id(session, user.coliving_id)
 
-    await call.message.answer(f"🔑 Код вашого колівінгу для ручного вводу: `{coliving.invite_code}`")
+    await call.message.answer(
+        f"🔑 Код вашого колівінгу для ручного вводу: `{coliving.invite_code}`",
+        reply_markup=get_back_kb("sotnik_back_panel", "◀️ Назад до панелі")
+    )
     await call.answer()
 
 # 3. Перемкнути прийом заявок
@@ -237,7 +246,8 @@ async def cb_regen_code(call: CallbackQuery):
     new_link = f"https://t.me/{bot_info.username}?start=join_{new_code}"
 
     await call.message.answer(
-        texts.CODE_REGENERATED_MSG.format(new_code=new_code, new_link=new_link)
+        texts.CODE_REGENERATED_MSG.format(new_code=new_code, new_link=new_link),
+        reply_markup=get_back_kb("sotnik_back_panel", "◀️ Назад до панелі")
     )
     await render_sotnik_panel(call, tg_id)
 
@@ -257,5 +267,5 @@ async def cb_group_guide(call: CallbackQuery):
         f"`/link_group {coliving.invite_code}`\n\n"
         "Після цього бот автоматично надсилатиме щотижневі графіки та термінові сповіщення саме туди!"
     )
-    await call.message.answer(guide_text)
+    await call.message.answer(guide_text, reply_markup=get_back_kb("sotnik_back_panel", "◀️ Назад до панелі"))
     await call.answer()

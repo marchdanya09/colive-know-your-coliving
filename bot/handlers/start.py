@@ -11,7 +11,8 @@ from bot.keyboards.sotnik_kb import get_request_action_kb
 from bot.keyboards.inline_helpers import (
     get_role_selection_kb,
     get_sotnik_start_choice_kb,
-    get_rooms_selection_kb
+    get_rooms_selection_kb,
+    get_back_kb
 )
 from config import settings
 import texts
@@ -60,6 +61,15 @@ async def handle_start(message: Message, command: CommandObject, state: FSMConte
     # Якщо новий користувач — показуємо вибір ролі
     await message.answer(texts.WELCOME_START, reply_markup=get_role_selection_kb())
 
+# Повернення назад до головного вибору ролі
+@router.callback_query(F.data == "role_back_to_start")
+async def cb_role_back_to_start(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text(texts.WELCOME_START, reply_markup=get_role_selection_kb())
+    await call.answer()
+
+# ----------------- ГІЛКА СОТНИКА -----------------
+
 @router.callback_query(F.data == "role_sotnik")
 async def cb_role_sotnik(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text(texts.SOTNIK_START_OPTIONS, reply_markup=get_sotnik_start_choice_kb())
@@ -68,44 +78,68 @@ async def cb_role_sotnik(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "sotnik_create_new")
 async def cb_sotnik_create_new(call: CallbackQuery, state: FSMContext):
     await state.set_state(ColivingWizard.waiting_for_name)
-    await call.message.edit_text(texts.WIZARD_NAME_PROMPT)
+    await call.message.edit_text(texts.WIZARD_NAME_PROMPT, reply_markup=get_back_kb("sotnik_back_to_choice"))
+    await call.answer()
+
+@router.callback_query(F.data == "sotnik_back_to_choice")
+async def cb_sotnik_back_to_choice(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text(texts.SOTNIK_START_OPTIONS, reply_markup=get_sotnik_start_choice_kb())
     await call.answer()
 
 @router.message(ColivingWizard.waiting_for_name)
 async def wizard_name(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name or len(name) > 100:
-        await message.answer("⚠️ Будь ласка, введіть коректну назву (до 100 символів):")
+        await message.answer("⚠️ Будь ласка, введіть коректну назву (до 100 символів):", reply_markup=get_back_kb("sotnik_back_to_choice"))
         return
     await state.update_data(coliving_name=name)
     await state.set_state(ColivingWizard.waiting_for_address)
-    await message.answer(texts.WIZARD_ADDRESS_PROMPT)
+    await message.answer(texts.WIZARD_ADDRESS_PROMPT, reply_markup=get_back_kb("wizard_back_to_name"))
+
+@router.callback_query(F.data == "wizard_back_to_name")
+async def cb_wizard_back_to_name(call: CallbackQuery, state: FSMContext):
+    await state.set_state(ColivingWizard.waiting_for_name)
+    await call.message.edit_text(texts.WIZARD_NAME_PROMPT, reply_markup=get_back_kb("sotnik_back_to_choice"))
+    await call.answer()
 
 @router.message(ColivingWizard.waiting_for_address)
 async def wizard_address(message: Message, state: FSMContext):
     address = message.text.strip()
     if not address or len(address) > 255:
-        await message.answer("⚠️ Будь ласка, введіть коректну адресу:")
+        await message.answer("⚠️ Будь ласка, введіть коректну адресу:", reply_markup=get_back_kb("wizard_back_to_name"))
         return
     await state.update_data(coliving_address=address)
     await state.set_state(ColivingWizard.waiting_for_people)
-    await message.answer(texts.WIZARD_PEOPLE_PROMPT)
+    await message.answer(texts.WIZARD_PEOPLE_PROMPT, reply_markup=get_back_kb("wizard_back_to_address"))
+
+@router.callback_query(F.data == "wizard_back_to_address")
+async def cb_wizard_back_to_address(call: CallbackQuery, state: FSMContext):
+    await state.set_state(ColivingWizard.waiting_for_address)
+    await call.message.edit_text(texts.WIZARD_ADDRESS_PROMPT, reply_markup=get_back_kb("wizard_back_to_name"))
+    await call.answer()
 
 @router.message(ColivingWizard.waiting_for_people)
 async def wizard_people(message: Message, state: FSMContext):
     text = message.text.strip()
     if not text.isdigit() or not (1 <= int(text) <= settings.MAX_PEOPLE_PER_COLIVING):
-        await message.answer(texts.WIZARD_INVALID_NUMBER)
+        await message.answer(texts.WIZARD_INVALID_NUMBER, reply_markup=get_back_kb("wizard_back_to_address"))
         return
     await state.update_data(total_people=int(text))
     await state.set_state(ColivingWizard.waiting_for_rooms)
-    await message.answer(texts.WIZARD_ROOMS_PROMPT)
+    await message.answer(texts.WIZARD_ROOMS_PROMPT, reply_markup=get_back_kb("wizard_back_to_people"))
+
+@router.callback_query(F.data == "wizard_back_to_people")
+async def cb_wizard_back_to_people(call: CallbackQuery, state: FSMContext):
+    await state.set_state(ColivingWizard.waiting_for_people)
+    await call.message.edit_text(texts.WIZARD_PEOPLE_PROMPT, reply_markup=get_back_kb("wizard_back_to_address"))
+    await call.answer()
 
 @router.message(ColivingWizard.waiting_for_rooms)
 async def wizard_rooms(message: Message, state: FSMContext):
     text = message.text.strip()
     if not text.isdigit() or not (1 <= int(text) <= 50):
-        await message.answer(texts.WIZARD_INVALID_NUMBER)
+        await message.answer(texts.WIZARD_INVALID_NUMBER, reply_markup=get_back_kb("wizard_back_to_people"))
         return
     total_rooms = int(text)
     data = await state.get_data()
@@ -147,11 +181,15 @@ async def wizard_rooms(message: Message, state: FSMContext):
             reply_markup=get_main_keyboard(is_sotnik=True, webapp_url=webapp_url)
         )
 
-# Реєстрація мешканця
+# ----------------- ГІЛКА МЕШКАНЦЯ -----------------
+
 @router.callback_query(F.data == "role_resident")
 async def cb_role_resident(call: CallbackQuery, state: FSMContext):
     await state.set_state(ResidentJoinState.waiting_for_code)
-    await call.message.edit_text(texts.RESIDENT_ENTER_CODE_PROMPT)
+    await call.message.edit_text(
+        texts.RESIDENT_ENTER_CODE_PROMPT,
+        reply_markup=get_back_kb("role_back_to_start")
+    )
     await call.answer()
 
 @router.message(ResidentJoinState.waiting_for_code)
@@ -164,7 +202,7 @@ async def proceed_with_code(message: Message, state: FSMContext, code: str):
 
     # 1. Перевірка блокування через підбір коду
     if rate_limiter.is_code_locked(tg_id):
-        await message.answer(texts.CODE_ATTEMPTS_EXCEEDED)
+        await message.answer(texts.CODE_ATTEMPTS_EXCEEDED, reply_markup=get_back_kb("role_back_to_start"))
         return
 
     async with AsyncSessionLocal() as session:
@@ -180,9 +218,9 @@ async def proceed_with_code(message: Message, state: FSMContext, code: str):
         if not coliving:
             is_locked = rate_limiter.record_failed_code_attempt(tg_id)
             if is_locked:
-                await message.answer(texts.CODE_ATTEMPTS_EXCEEDED)
+                await message.answer(texts.CODE_ATTEMPTS_EXCEEDED, reply_markup=get_back_kb("role_back_to_start"))
             else:
-                await message.answer(texts.CODE_NOT_FOUND)
+                await message.answer(texts.CODE_NOT_FOUND, reply_markup=get_back_kb("role_back_to_start"))
             return
 
         # 4. Перевірка чорного списку
@@ -192,19 +230,19 @@ async def proceed_with_code(message: Message, state: FSMContext, code: str):
 
         # 5. Перевірка блокування прийому заявок сотником
         if coliving.is_join_locked:
-            await message.answer(texts.REGISTRATION_LOCKED)
+            await message.answer(texts.REGISTRATION_LOCKED, reply_markup=get_back_kb("role_back_to_start"))
             return
 
         # 6. Перевірка місткості колівінгу (макс 50)
         curr_residents = await crud.count_residents(session, coliving.id)
         if curr_residents >= coliving.total_people or curr_residents >= settings.MAX_PEOPLE_PER_COLIVING:
-            await message.answer(texts.COLIVING_FULL)
+            await message.answer(texts.COLIVING_FULL, reply_markup=get_back_kb("role_back_to_start"))
             return
 
         # 7. Перевірка черги заявок (макс 30)
         pending_count = await crud.count_pending_requests(session, coliving.id)
         if pending_count >= settings.MAX_PENDING_REQUESTS:
-            await message.answer(texts.QUEUE_FULL)
+            await message.answer(texts.QUEUE_FULL, reply_markup=get_back_kb("role_back_to_start"))
             return
 
         # 8. Перевірка наявної активної заявки
@@ -219,14 +257,24 @@ async def proceed_with_code(message: Message, state: FSMContext, code: str):
             texts.RESIDENT_FULLNAME_PROMPT.format(
                 coliving_name=coliving.name,
                 address=coliving.address
-            )
+            ),
+            reply_markup=get_back_kb("join_back_to_code")
         )
+
+@router.callback_query(F.data == "join_back_to_code")
+async def cb_join_back_to_code(call: CallbackQuery, state: FSMContext):
+    await state.set_state(ResidentJoinState.waiting_for_code)
+    await call.message.edit_text(
+        texts.RESIDENT_ENTER_CODE_PROMPT,
+        reply_markup=get_back_kb("role_back_to_start")
+    )
+    await call.answer()
 
 @router.message(ResidentJoinState.waiting_for_name)
 async def resident_entered_name(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name or len(name) > 100:
-        await message.answer("⚠️ Введіть коректне Прізвище та Ім'я:")
+        await message.answer("⚠️ Введіть коректне Прізвище та Ім'я:", reply_markup=get_back_kb("join_back_to_code"))
         return
 
     await state.update_data(full_name=name)
@@ -245,6 +293,21 @@ async def resident_entered_name(message: Message, state: FSMContext):
 
         await state.set_state(ResidentJoinState.waiting_for_room)
         await message.answer("\n".join(text_lines), reply_markup=get_rooms_selection_kb(rooms))
+
+@router.callback_query(F.data == "join_back_to_name")
+async def cb_join_back_to_name(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    coliving_name = data.get("coliving_name", "")
+    address = data.get("coliving_addr", "")
+    await state.set_state(ResidentJoinState.waiting_for_name)
+    await call.message.edit_text(
+        texts.RESIDENT_FULLNAME_PROMPT.format(
+            coliving_name=coliving_name,
+            address=address
+        ),
+        reply_markup=get_back_kb("join_back_to_code")
+    )
+    await call.answer()
 
 @router.callback_query(ResidentJoinState.waiting_for_room, F.data.startswith("select_room_"))
 async def resident_selected_room(call: CallbackQuery, state: FSMContext):

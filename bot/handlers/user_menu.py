@@ -1,11 +1,11 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, ContentType
+from aiogram.types import Message, CallbackQuery, ContentType, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from database.db import AsyncSessionLocal
 from database import crud
 from bot.middlewares.anti_spam import rate_limiter
-from bot.keyboards.inline_helpers import get_my_room_actions_kb
+from bot.keyboards.inline_helpers import get_my_room_actions_kb, get_cancel_kb
 from bot.keyboards.main_menu import get_main_keyboard
 from config import settings
 import texts
@@ -114,7 +114,16 @@ async def cb_room_broadcast_prompt(call: CallbackQuery, state: FSMContext):
         await call.answer(texts.ROOM_BROADCAST_THROTTLED, show_alert=True)
         return
     await state.set_state(RoomBroadcastState.waiting_for_text)
-    await call.message.answer(texts.ROOM_BROADCAST_PROMPT)
+    await call.message.answer(
+        texts.ROOM_BROADCAST_PROMPT,
+        reply_markup=get_cancel_kb("cancel_room_broadcast", "❌ Скасувати відправку")
+    )
+    await call.answer()
+
+@router.callback_query(F.data == "cancel_room_broadcast")
+async def cb_cancel_room_broadcast(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text("❌ Відправку повідомлення кімнаті скасовано.")
     await call.answer()
 
 @router.message(RoomBroadcastState.waiting_for_text)
@@ -152,13 +161,33 @@ async def process_room_broadcast(message: Message, state: FSMContext):
 
         await message.answer(f"✅ Повідомлення надіслано сусідам ({sent_count} осіб)!")
 
-# Залишити колівінг
+# Залишити колівінг — підтвердження
 @router.callback_query(F.data == "confirm_leave_coliving")
-async def cb_leave_coliving(call: CallbackQuery):
+async def cb_confirm_leave_coliving(call: CallbackQuery):
+    confirm_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Так, вийти з колівінгу 🚪", callback_data="do_leave_coliving")
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Скасувати / Залишитися", callback_data="cancel_leave_coliving")
+            ]
+        ]
+    )
+    await call.message.edit_text("⚠️ **Ви впевнені, що хочете залишити колівінг?**\nВсі ваші дані прив'язки до кімнати буде скинуто.", reply_markup=confirm_kb)
+    await call.answer()
+
+@router.callback_query(F.data == "cancel_leave_coliving")
+async def cb_cancel_leave_coliving(call: CallbackQuery):
+    await call.message.edit_text("✅ Дія скасована. Ви залишаєтесь у своєму колівінгу.")
+    await call.answer()
+
+@router.callback_query(F.data == "do_leave_coliving")
+async def cb_do_leave_coliving(call: CallbackQuery):
     tg_id = call.from_user.id
     async with AsyncSessionLocal() as session:
         await crud.remove_user_from_coliving(session, tg_id)
-    await call.message.edit_text("🚪 Ви покинули колівінг. Щоб приєднатися знову, скористайтесь /start.")
+    await call.message.edit_text("🚪 Ви покинули колівінг. Щоб зареєструватися знову, скористайтесь /start.")
     await call.answer()
 
 # 3. 📋 Мої обов'язки
@@ -181,7 +210,16 @@ async def menu_urgent_complaint(message: Message, state: FSMContext):
             return
 
     await state.set_state(ComplaintState.waiting_for_photo)
-    await message.answer(texts.COMPLAINT_INTRO)
+    await message.answer(
+        texts.COMPLAINT_INTRO,
+        reply_markup=get_cancel_kb("cancel_complaint", "❌ Скасувати скаргу")
+    )
+
+@router.callback_query(F.data == "cancel_complaint")
+async def cb_cancel_complaint(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text("❌ Подання термінової скарги скасовано.")
+    await call.answer()
 
 @router.message(ComplaintState.waiting_for_photo, F.photo)
 async def complaint_photo(message: Message, state: FSMContext):
@@ -189,7 +227,10 @@ async def complaint_photo(message: Message, state: FSMContext):
     photo = message.photo[-1]
     await state.update_data(photo_file_id=photo.file_id)
     await state.set_state(ComplaintState.waiting_for_comment)
-    await message.answer(texts.COMPLAINT_COMMENT_PROMPT)
+    await message.answer(
+        texts.COMPLAINT_COMMENT_PROMPT,
+        reply_markup=get_cancel_kb("cancel_complaint", "❌ Скасувати скаргу")
+    )
 
 @router.message(ComplaintState.waiting_for_comment)
 async def complaint_comment(message: Message, state: FSMContext):
