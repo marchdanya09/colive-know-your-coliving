@@ -13,7 +13,8 @@ from bot.keyboards.sotnik_kb import (
     get_sotnik_user_card_kb,
     get_sotnik_reassign_room_kb,
     get_sotnik_fines_kb,
-    get_sotnik_duty_kb
+    get_sotnik_duty_kb,
+    get_sotnik_duty_picker_kb
 )
 from bot.keyboards.inline_helpers import get_back_kb
 from bot.keyboards.main_menu import get_main_keyboard
@@ -316,6 +317,7 @@ class SotnikFineFSM(StatesGroup):
     waiting_for_new_room_capacity = State()
     waiting_for_edit_coliving_name = State()
     waiting_for_edit_coliving_address = State()
+    waiting_for_duty_rules = State()
 
 
 
@@ -343,19 +345,21 @@ async def cb_manage_members(call: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("sotnik_view_user_"))
-async def cb_view_user(call: CallbackQuery):
+async def cb_view_user(call: CallbackQuery, answer: bool = True):
     target_user_id = int(call.data.replace("sotnik_view_user_", ""))
     tg_id = call.from_user.id
 
     async with AsyncSessionLocal() as session:
         admin = await crud.get_user_by_tg_id(session, tg_id)
         if not admin or admin.role != "SOTNIK":
-            await call.answer("Немає доступу", show_alert=True)
+            if answer:
+                await call.answer("Немає доступу", show_alert=True)
             return
 
         target_user = await crud.get_user_by_id(session, target_user_id)
         if not target_user or target_user.coliving_id != admin.coliving_id:
-            await call.answer("Користувача не знайдено або він залишив колівінг.", show_alert=True)
+            if answer:
+                await call.answer("Користувача не знайдено або він залишив колівінг.", show_alert=True)
             await cb_manage_members(call)
             return
 
@@ -368,12 +372,18 @@ async def cb_view_user(call: CallbackQuery):
             username_str=username_str,
             room_name=room_name,
             role_badge=role_badge,
+            room_role=target_user.room_role or "Мешканець",
+            room_duty=target_user.room_duty or "Не призначено",
             fines=target_user.unpaid_fines
         )
 
         kb = get_sotnik_user_card_kb(target_user, tg_id)
         await call.message.edit_text(card_text, reply_markup=kb)
-    await call.answer()
+    if answer:
+        try:
+            await call.answer()
+        except Exception:
+            pass
 
 
 @router.callback_query(F.data.startswith("sotnik_change_room_"))
@@ -415,7 +425,7 @@ async def cb_set_room(call: CallbackQuery):
 
     await call.answer(f"Кімнату успішно змінено на {new_room.name}!", show_alert=True)
     call.data = f"sotnik_view_user_{user_id}"
-    await cb_view_user(call)
+    await cb_view_user(call, answer=False)
 
 
 @router.callback_query(F.data.startswith("sotnik_toggle_role_"))
@@ -442,7 +452,71 @@ async def cb_toggle_role(call: CallbackQuery):
 
     await call.answer(msg, show_alert=True)
     call.data = f"sotnik_view_user_{user_id}"
-    await cb_view_user(call)
+    await cb_view_user(call, answer=False)
+
+
+@router.callback_query(F.data.startswith("sotnik_toggle_starosta_"))
+async def cb_sotnik_toggle_starosta(call: CallbackQuery):
+    user_id = int(call.data.replace("sotnik_toggle_starosta_", ""))
+    async with AsyncSessionLocal() as session:
+        target_user = await crud.get_user_by_id(session, user_id)
+        if not target_user:
+            await call.answer("Користувача не знайдено.", show_alert=True)
+            return
+        new_role = "Мешканець" if target_user.room_role == "Староста" else "Староста"
+        await crud.set_user_room_role(session, user_id, new_role)
+        try:
+            notif = f"⭐ <b>Сотник оновив ваш статус у кімнаті:</b> {new_role}!"
+            await call.bot.send_message(chat_id=target_user.telegram_id, text=notif)
+        except Exception:
+            pass
+
+    await call.answer(f"Статус Старости оновлено: {new_role}!", show_alert=True)
+    call.data = f"sotnik_view_user_{user_id}"
+    await cb_view_user(call, answer=False)
+
+
+@router.callback_query(F.data.startswith("sotnik_pick_duty_"))
+async def cb_sotnik_pick_duty(call: CallbackQuery):
+    user_id = int(call.data.replace("sotnik_pick_duty_", ""))
+    async with AsyncSessionLocal() as session:
+        target_user = await crud.get_user_by_id(session, user_id)
+        if not target_user:
+            await call.answer("Користувача не знайдено.", show_alert=True)
+            return
+    kb = get_sotnik_duty_picker_kb(user_id)
+    await call.message.edit_text(
+        f"📋 <b>Оберіть обов'язок для {target_user.full_name}:</b>\nПоточний: <b>{target_user.room_duty or 'Не призначено'}</b>",
+        reply_markup=kb
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sotnik_set_user_duty_"))
+async def cb_sotnik_set_user_duty(call: CallbackQuery):
+    parts = call.data.replace("sotnik_set_user_duty_", "").split("_")
+    user_id = int(parts[0])
+    duty_code = parts[1]
+    duty_map = {
+        "kitchen": "🍳 Кухня",
+        "trash": "🗑 Сміття",
+        "bath": "🧼 Санвузол",
+        "order": "🧹 Порядок",
+        "none": "Не призначено"
+    }
+    duty_name = duty_map.get(duty_code, "Не призначено")
+    async with AsyncSessionLocal() as session:
+        user = await crud.set_user_room_duty(session, user_id, duty_name)
+        if user:
+            try:
+                notif = f"📋 <b>Сотник призначив вам обов'язок у кімнаті:</b> {duty_name}!"
+                await call.bot.send_message(chat_id=user.telegram_id, text=notif)
+            except Exception:
+                pass
+
+    await call.answer(f"Обов'язок встановлено: {duty_name}!", show_alert=True)
+    call.data = f"sotnik_view_user_{user_id}"
+    await cb_view_user(call, answer=False)
 
 
 @router.callback_query(F.data.startswith("sotnik_kick_"))
@@ -658,6 +732,7 @@ async def cb_duty_menu(call: CallbackQuery):
     tg_id = call.from_user.id
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
+        coliving = await crud.get_coliving_by_id(session, user.coliving_id)
         current_duty = await crud.get_current_duty(session, user.coliving_id)
         rooms = await crud.get_rooms_with_users(session, user.coliving_id)
 
@@ -672,14 +747,59 @@ async def cb_duty_menu(call: CallbackQuery):
             period = "—"
             cur_id = None
 
+        rules_preview = coliving.custom_duty_rules if (coliving and coliving.custom_duty_rules) else texts.DEFAULT_DUTIES_CHECKLIST
+
         text = texts.SOTNIK_DUTY_PANEL_TEXT.format(
             room_name=cur_name,
             members=cur_members,
-            period=period
+            period=period,
+            rules_preview=rules_preview
         )
         kb = get_sotnik_duty_kb(rooms, cur_id)
         await call.message.edit_text(text, reply_markup=kb)
     await call.answer()
+
+
+@router.callback_query(F.data == "sotnik_edit_duty_rules")
+async def cb_sotnik_edit_duty_rules(call: CallbackQuery, state: FSMContext):
+    await state.set_state(SotnikFineFSM.waiting_for_duty_rules)
+    edit_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Скинути до стандартних", callback_data="sotnik_reset_duty_rules")],
+            [InlineKeyboardButton(text="◀️ Скасувати", callback_data="sotnik_duty_menu")]
+        ]
+    )
+    await call.message.edit_text(
+        "📝 <b>Введіть оновлений список / чекліст обов'язків чергової кімнати:</b>\n\n"
+        "Надішліть текст повідомленням (або натисніть кнопку нижче, щоб скинути до стандартних):",
+        reply_markup=edit_kb
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "sotnik_reset_duty_rules")
+async def cb_sotnik_reset_duty_rules(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    tg_id = call.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        if user and user.coliving_id:
+            await crud.set_coliving_duty_rules(session, user.coliving_id, "")
+    await call.answer("Правила скинуто до стандартних!", show_alert=True)
+    await cb_duty_menu(call)
+
+
+@router.message(SotnikFineFSM.waiting_for_duty_rules)
+async def process_sotnik_edit_duty_rules(message: Message, state: FSMContext):
+    tg_id = message.from_user.id
+    new_rules = message.text.strip() if message.text else ""
+    await state.clear()
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        if user and user.coliving_id and new_rules:
+            await crud.set_coliving_duty_rules(session, user.coliving_id, new_rules)
+    await message.answer("✅ Чекліст обов'язків чергування успішно оновлено!")
+    await render_sotnik_panel(message, tg_id)
 
 
 @router.callback_query(F.data.startswith("sotnik_set_duty_"))

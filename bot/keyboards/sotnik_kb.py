@@ -86,6 +86,15 @@ def get_sotnik_user_card_kb(user: User, current_tg_id: int) -> InlineKeyboardMar
     else:
         buttons.append([InlineKeyboardButton(text="👑 Призначити Сотником", callback_data=f"sotnik_toggle_role_{user.id}")])
 
+    # Кнопка Старости кімнати
+    if user.room_role == "Староста":
+        buttons.append([InlineKeyboardButton(text="⭐ Зняти статус Старости", callback_data=f"sotnik_toggle_starosta_{user.id}")])
+    else:
+        buttons.append([InlineKeyboardButton(text="⭐ Призначити Старостою кімнати", callback_data=f"sotnik_toggle_starosta_{user.id}")])
+
+    duty_name = user.room_duty if user.room_duty and user.room_duty != "Не призначено" else "Не призначено"
+    buttons.append([InlineKeyboardButton(text=f"📋 Призначити обов'язок ({duty_name})", callback_data=f"sotnik_pick_duty_{user.id}")])
+
     buttons.append([
         InlineKeyboardButton(text="💰 Нарахувати штраф", callback_data=f"sotnik_fine_user_{user.id}"),
         InlineKeyboardButton(text="💸 Списати штрафи", callback_data=f"sotnik_clear_fines_{user.id}")
@@ -151,8 +160,31 @@ def get_sotnik_duty_kb(rooms: List[Room], current_room_id: Optional[int]) -> Inl
         buttons.append([
             InlineKeyboardButton(text=f"{status_icon}{r.name}", callback_data=f"sotnik_set_duty_{r.id}")
         ])
+    buttons.append([
+        InlineKeyboardButton(text="📝 Налаштувати чекліст обов'язків", callback_data="sotnik_edit_duty_rules")
+    ])
     buttons.append([InlineKeyboardButton(text="◀️ Назад до панелі", callback_data="sotnik_back_panel")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_sotnik_duty_picker_kb(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🍳 Кухня", callback_data=f"sotnik_set_user_duty_{user_id}_kitchen"),
+                InlineKeyboardButton(text="🗑 Сміття", callback_data=f"sotnik_set_user_duty_{user_id}_trash")
+            ],
+            [
+                InlineKeyboardButton(text="🧼 Санвузол", callback_data=f"sotnik_set_user_duty_{user_id}_bath"),
+                InlineKeyboardButton(text="🧹 Порядок", callback_data=f"sotnik_set_user_duty_{user_id}_order")
+            ],
+            [
+                InlineKeyboardButton(text="❌ Скинути обов'язок", callback_data=f"sotnik_set_user_duty_{user_id}_none")
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Назад до картки", callback_data=f"sotnik_view_user_{user_id}")
+            ]
+        ]
+    )
 
 def get_request_action_kb(request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(

@@ -576,3 +576,44 @@ async def add_room_to_coliving(
     return room
 
 
+async def set_user_room_duty(session: AsyncSession, user_id: int, duty: str) -> Optional[User]:
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return None
+    user.room_duty = duty
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def set_user_room_role(session: AsyncSession, user_id: int, role: str) -> Optional[User]:
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return None
+    user.room_role = role
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def set_room_custom_duties(session: AsyncSession, room_id: int, duties_text: str) -> Optional[Room]:
+    room = await get_room_by_id(session, room_id)
+    if not room:
+        return None
+    room.custom_duties = duties_text.strip()
+    await session.commit()
+    await session.refresh(room)
+    return room
+
+
+async def set_coliving_duty_rules(session: AsyncSession, coliving_id: int, rules_text: str) -> Optional[Coliving]:
+    coliving = await get_coliving_by_id(session, coliving_id)
+    if not coliving:
+        return None
+    coliving.custom_duty_rules = rules_text.strip()
+    await session.commit()
+    await session.refresh(coliving)
+    return coliving
+
+
+

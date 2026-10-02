@@ -24,6 +24,7 @@ class Coliving(Base):
     
     total_people = Column(Integer, default=16)
     total_rooms = Column(Integer, default=4)
+    custom_duty_rules = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utc_now)
 
     rooms = relationship("Room", back_populates="coliving", cascade="all, delete-orphan", order_by="Room.rotation_order")
@@ -43,6 +44,7 @@ class Room(Base):
     name = Column(String(100), nullable=False)
     capacity = Column(Integer, default=4)
     rotation_order = Column(Integer, default=1)
+    custom_duties = Column(Text, nullable=True)
 
     coliving = relationship("Coliving", back_populates="rooms")
     users = relationship("User", back_populates="room")
@@ -60,6 +62,8 @@ class User(Base):
     full_name = Column(String(120), nullable=False)
     username = Column(String(100), nullable=True)
     role = Column(String(20), default="RESIDENT")  # "SUPER_ADMIN", "SOTNIK", "RESIDENT"
+    room_role = Column(String(50), default="Мешканець")  # "Староста" or "Мешканець"
+    room_duty = Column(String(50), default="Не призначено")  # "🍳 Кухня", "🗑 Сміття", "🧼 Санвузол", "🧹 Порядок"
     is_approved = Column(Boolean, default=False)
     unpaid_fines = Column(Float, default=0.0)
     created_at = Column(DateTime, default=utc_now)
