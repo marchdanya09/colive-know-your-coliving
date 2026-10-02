@@ -318,6 +318,7 @@ class SotnikFineFSM(StatesGroup):
     waiting_for_edit_coliving_name = State()
     waiting_for_edit_coliving_address = State()
     waiting_for_duty_rules = State()
+    waiting_for_user_custom_duty = State()
 
 
 
@@ -517,6 +518,50 @@ async def cb_sotnik_set_user_duty(call: CallbackQuery):
     await call.answer(f"Обов'язок встановлено: {duty_name}!", show_alert=True)
     call.data = f"sotnik_view_user_{user_id}"
     await cb_view_user(call, answer=False)
+
+
+@router.callback_query(F.data.startswith("sotnik_custom_duty_"))
+async def cb_sotnik_custom_duty(call: CallbackQuery, state: FSMContext):
+    user_id = int(call.data.replace("sotnik_custom_duty_", ""))
+    async with AsyncSessionLocal() as session:
+        target_user = await crud.get_user_by_id(session, user_id)
+        if not target_user:
+            await call.answer("Користувача не знайдено.", show_alert=True)
+            return
+        user_name = target_user.full_name
+    await state.set_state(SotnikFineFSM.waiting_for_user_custom_duty)
+    await state.update_data(target_user_id=user_id)
+    await call.message.edit_text(
+        f"✍️ <b>Введіть назву власного обов'язку для {user_name}:</b>\n\n"
+        "<i>(Наприклад: 🪴 Полив рослин, 📦 Прийом посилок, ☕ Закупівля кави тощо)</i>\n\n"
+        "Максимальна довжина: до 40 символів.",
+        reply_markup=get_back_kb(f"sotnik_pick_duty_{user_id}", "◀️ Скасувати")
+    )
+    await call.answer()
+
+
+@router.message(SotnikFineFSM.waiting_for_user_custom_duty)
+async def process_sotnik_custom_duty(message: Message, state: FSMContext):
+    data = await state.get_data()
+    target_user_id = data.get("target_user_id")
+    duty_text = (message.text or message.caption or "").strip()
+    if len(duty_text) < 2 or len(duty_text) > 40:
+        await message.answer("⚠️ Назва обов'язку повинна містити від 2 до 40 символів. Спробуйте ще раз:")
+        return
+    await state.clear()
+    if target_user_id:
+        async with AsyncSessionLocal() as session:
+            user = await crud.set_user_room_duty(session, target_user_id, duty_text)
+            if user:
+                try:
+                    await message.bot.send_message(
+                        chat_id=user.telegram_id,
+                        text=f"📋 <b>Сотник призначив вам обов'язок у кімнаті:</b> {duty_text}!"
+                    )
+                except Exception:
+                    pass
+    await message.answer(f"✅ Власний обов'язок успішно встановлено: <b>{duty_text}</b>!")
+    await render_sotnik_panel(message, message.from_user.id)
 
 
 @router.callback_query(F.data.startswith("sotnik_kick_"))

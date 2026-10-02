@@ -468,6 +468,22 @@ async def test_room_duties_and_starosta_assignment_by_buttons(memory_storage):
         assert u.room_duty == "🍳 Кухня"
         assert u.room_role == "Староста"
 
+    # 5a. Встановлення власного обов'язку
+    state_custom = make_fsm_context(memory_storage, user_tg)
+    call_custom = make_mock_callback(user_tg, f"custom_duty_prompt_{user_id}")
+    await user_menu.cb_custom_duty_prompt(call_custom, state_custom)
+    call_custom.message.edit_text.assert_called_once()
+    assert "Введіть назву власного обов'язку" in call_custom.message.edit_text.call_args[0][0]
+
+    msg_custom = make_mock_message(user_tg, "🪴 Полив квітів та рослин")
+    await user_menu.process_custom_duty(msg_custom, state_custom)
+    assert msg_custom.answer.call_count == 2
+    assert "Власний обов'язок успішно встановлено" in msg_custom.answer.call_args_list[0][0][0]
+
+    async with AsyncSessionLocal() as session:
+        u = await crud.get_user_by_id(session, user_id)
+        assert u.room_duty == "🪴 Полив квітів та рослин"
+
     # 6. Встановлення внутрішніх правил кімнати
     state = make_fsm_context(memory_storage, user_tg)
     call_rules = make_mock_callback(user_tg, f"room_edit_rules_{room_id}")
@@ -484,7 +500,7 @@ async def test_room_duties_and_starosta_assignment_by_buttons(memory_storage):
     await user_menu.cb_user_nav_duties(call_nav_duties)
     call_nav_duties.message.edit_text.assert_called_once()
     page_text = call_nav_duties.message.edit_text.call_args[0][0]
-    assert "🍳 Кухня" in page_text
+    assert "🪴 Полив квітів та рослин" in page_text
     assert "Староста кімнати" in page_text
 
 
@@ -531,6 +547,22 @@ async def test_sotnik_role_and_duty_assignment_by_buttons(memory_storage):
     await sotnik_panel.cb_sotnik_set_user_duty(call_duty)
     call_duty.answer.assert_called_once_with("Обов'язок встановлено: 🧼 Санвузол!", show_alert=True)
 
+    # 3a. Сотник встановлює власний кастомний обов'язок
+    state_sotnik_custom = make_fsm_context(memory_storage, sotnik_tg)
+    call_s_custom = make_mock_callback(sotnik_tg, f"sotnik_custom_duty_{res_id}")
+    await sotnik_panel.cb_sotnik_custom_duty(call_s_custom, state_sotnik_custom)
+    call_s_custom.message.edit_text.assert_called_once()
+    assert "Введіть назву власного обов'язку" in call_s_custom.message.edit_text.call_args[0][0]
+
+    msg_s_custom = make_mock_message(sotnik_tg, "☕ Закупівля кави для кухні")
+    await sotnik_panel.process_sotnik_custom_duty(msg_s_custom, state_sotnik_custom)
+    assert msg_s_custom.answer.call_count == 2
+    assert "Власний обов'язок успішно встановлено" in msg_s_custom.answer.call_args_list[0][0][0]
+
+    async with AsyncSessionLocal() as session:
+        u = await crud.get_user_by_id(session, res_id)
+        assert u.room_duty == "☕ Закупівля кави для кухні"
+
     # 4. Сотник редагує загальні правила чергувань колівінгу
     state = make_fsm_context(memory_storage, sotnik_tg)
     call_edit_rules = make_mock_callback(sotnik_tg, "sotnik_edit_duty_rules")
@@ -546,7 +578,7 @@ async def test_sotnik_role_and_duty_assignment_by_buttons(memory_storage):
     async with AsyncSessionLocal() as session:
         u = await crud.get_user_by_id(session, res_id)
         assert u.room_role == "Староста"
-        assert u.room_duty == "🧼 Санвузол"
+        assert u.room_duty == "☕ Закупівля кави для кухні"
         c = await crud.get_coliving_by_id(session, col.id)
         assert "Сортуємо пластик окремо" in c.custom_duty_rules
 

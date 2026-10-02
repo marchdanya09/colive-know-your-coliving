@@ -35,6 +35,9 @@ class DirectReplyState(StatesGroup):
 class RoomRulesState(StatesGroup):
     waiting_for_rules = State()
 
+class CustomDutyState(StatesGroup):
+    waiting_for_duty_name = State()
+
 MENU_BUTTONS = {
     texts.BTN_MY_COLIVING, texts.BTN_MY_ROOM, texts.BTN_CALENDAR,
     texts.BTN_DUTIES, texts.BTN_URGENT_COMPLAINT, texts.BTN_FINES,
@@ -383,6 +386,60 @@ async def cb_toggle_starosta(call: CallbackQuery):
 
     await call.answer(f"Статус Старости оновлено: {new_role}!", show_alert=True)
     await cb_room_duties_menu(call, answer=False)
+
+
+@router.callback_query(F.data.startswith("custom_duty_prompt_"))
+async def cb_custom_duty_prompt(call: CallbackQuery, state: FSMContext):
+    user_id = int(call.data.replace("custom_duty_prompt_", ""))
+    async with AsyncSessionLocal() as session:
+        target_user = await crud.get_user_by_id(session, user_id)
+        if not target_user:
+            await call.answer("Користувача не знайдено.", show_alert=True)
+            return
+        user_name = target_user.full_name
+    await state.set_state(CustomDutyState.waiting_for_duty_name)
+    await state.update_data(target_user_id=user_id)
+    await call.message.edit_text(
+        f"✍️ <b>Введіть назву власного обов'язку для {user_name}:</b>\n\n"
+        "<i>(Наприклад: 🪴 Полив рослин, 📦 Прийом посилок, ☕ Закупівля кави/хімії тощо)</i>\n\n"
+        "Максимальна довжина: до 40 символів.",
+        reply_markup=get_cancel_kb("cancel_custom_duty", "◀️ Скасувати")
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "cancel_custom_duty")
+async def cb_cancel_custom_duty(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text("❌ Введення власного обов'язку скасовано.")
+    await call.answer()
+    await cb_room_duties_menu(call)
+
+
+@router.message(CustomDutyState.waiting_for_duty_name)
+async def process_custom_duty(message: Message, state: FSMContext):
+    if await check_menu_redirection(message, state):
+        return
+    data = await state.get_data()
+    target_user_id = data.get("target_user_id")
+    duty_text = (message.text or message.caption or "").strip()
+    if len(duty_text) < 2 or len(duty_text) > 40:
+        await message.answer("⚠️ Назва обов'язку повинна містити від 2 до 40 символів. Спробуйте ще раз або оберіть пункт меню:")
+        return
+    await state.clear()
+    if target_user_id:
+        async with AsyncSessionLocal() as session:
+            user = await crud.set_user_room_duty(session, target_user_id, duty_text)
+            if user:
+                try:
+                    await message.bot.send_message(
+                        chat_id=user.telegram_id,
+                        text=f"🔔 <b>Ваш обов'язок у кімнаті оновлено:</b> {duty_text}!"
+                    )
+                except Exception:
+                    pass
+    await message.answer(f"✅ Власний обов'язок успішно встановлено: <b>{duty_text}</b>!")
+    await render_my_room(message, message.from_user.id)
 
 
 @router.callback_query(F.data.startswith("room_edit_rules_"))

@@ -178,7 +178,8 @@ def get_sotnik_duty_picker_kb(user_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🧹 Порядок", callback_data=f"sotnik_set_user_duty_{user_id}_order")
             ],
             [
-                InlineKeyboardButton(text="❌ Скинути обов'язок", callback_data=f"sotnik_set_user_duty_{user_id}_none")
+                InlineKeyboardButton(text="✍️ Свій обов'язок", callback_data=f"sotnik_custom_duty_{user_id}"),
+                InlineKeyboardButton(text="❌ Скинути", callback_data=f"sotnik_set_user_duty_{user_id}_none")
             ],
             [
                 InlineKeyboardButton(text="◀️ Назад до картки", callback_data=f"sotnik_view_user_{user_id}")

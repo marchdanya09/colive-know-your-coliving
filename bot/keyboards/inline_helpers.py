@@ -78,10 +78,11 @@ def get_duty_picker_kb(user_id: int, current_room_role: str, back_callback: str)
                 InlineKeyboardButton(text="🧹 Порядок", callback_data=f"set_duty_{user_id}_order")
             ],
             [
-                InlineKeyboardButton(text=starosta_btn_text, callback_data=f"toggle_starosta_{user_id}")
+                InlineKeyboardButton(text="✍️ Свій обов'язок", callback_data=f"custom_duty_prompt_{user_id}"),
+                InlineKeyboardButton(text="❌ Скинути", callback_data=f"set_duty_{user_id}_none")
             ],
             [
-                InlineKeyboardButton(text="❌ Скинути обов'язок", callback_data=f"set_duty_{user_id}_none")
+                InlineKeyboardButton(text=starosta_btn_text, callback_data=f"toggle_starosta_{user_id}")
             ],
             [
                 InlineKeyboardButton(text="◀️ Назад", callback_data=back_callback)
