@@ -17,6 +17,8 @@ class Coliving(Base):
     
     group_chat_id = Column(BigInteger, nullable=True)
     duty_topic_id = Column(Integer, nullable=True)
+    complaints_topic_id = Column(Integer, nullable=True)
+    lost_found_topic_id = Column(Integer, nullable=True)
     
     default_fine_amount = Column(Float, default=50.0)
     fine_distribution = Column(String(20), default="ROOM")  # "ROOM" or "INDIVIDUAL"
@@ -112,7 +114,7 @@ class Complaint(Base):
     coliving_id = Column(Integer, ForeignKey("colivings.id"), nullable=False)
     reporter_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     target_room_id = Column(Integer, ForeignKey("rooms.id"), nullable=False)
-    photo_file_id = Column(String(255), nullable=False)
+    photo_file_id = Column(String(255), nullable=True)
     comment = Column(Text, nullable=True)
     status = Column(String(20), default="OPEN")  # "OPEN", "RESOLVED", "FINED"
     created_at = Column(DateTime, default=utc_now)

@@ -14,6 +14,7 @@ from bot.keyboards.main_menu import get_main_keyboard
 from config import settings
 import texts
 from typing import Optional
+from datetime import timedelta, date
 
 router = Router()
 
@@ -161,7 +162,7 @@ async def menu_calendar(message: Message):
             members = "не визначено"
             dates_str = "поточний період"
 
-        # Формуємо наступний графік
+        # Формуємо наступний графік з конкретними датами за днями
         upcoming = []
         if rooms:
             cur_idx = 0
@@ -170,9 +171,13 @@ async def menu_calendar(message: Message):
                     if r.id == current_duty.room_id:
                         cur_idx = idx
                         break
+            base_date = current_duty.end_date if (current_duty and current_duty.end_date) else (date.today() + timedelta(days=7))
             for i in range(1, min(4, len(rooms))):
                 nxt = rooms[(cur_idx + i) % len(rooms)]
-                upcoming.append(f"• Наступний тиждень: <b>{nxt.name}</b>")
+                w_start = base_date + timedelta(days=7 * (i - 1))
+                w_end = base_date + timedelta(days=7 * i)
+                dates_part = f"{w_start.strftime('%d.%m')} - {w_end.strftime('%d.%m')}"
+                upcoming.append(f"• {dates_part}: <b>{nxt.name}</b>")
 
         upcoming_str = "\n".join(upcoming) if upcoming else "Графік формується"
 

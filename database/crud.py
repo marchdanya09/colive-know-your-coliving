@@ -179,6 +179,35 @@ async def link_group_to_coliving(session: AsyncSession, coliving_id: int, chat_i
     await session.execute(stmt)
     await session.commit()
 
+async def update_coliving_topics(
+    session: AsyncSession,
+    coliving_id: int,
+    duty_topic_id: Optional[int] = None,
+    complaints_topic_id: Optional[int] = None,
+    lost_found_topic_id: Optional[int] = None
+):
+    values = {}
+    if duty_topic_id is not None:
+        values["duty_topic_id"] = duty_topic_id
+    if complaints_topic_id is not None:
+        values["complaints_topic_id"] = complaints_topic_id
+    if lost_found_topic_id is not None:
+        values["lost_found_topic_id"] = lost_found_topic_id
+    if values:
+        stmt = update(Coliving).where(Coliving.id == coliving_id).values(**values)
+        await session.execute(stmt)
+        await session.commit()
+
+async def get_coliving_users(session: AsyncSession, coliving_id: int) -> List[User]:
+    stmt = (
+        select(User)
+        .options(selectinload(User.room))
+        .where(and_(User.coliving_id == coliving_id, User.is_approved == True))
+        .order_by(User.full_name)
+    )
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
 # --- Кімнати та мешканці ---
 
 async def get_rooms_with_users(session: AsyncSession, coliving_id: int) -> List[Room]:
@@ -369,8 +398,8 @@ async def create_complaint(
     coliving_id: int,
     reporter_id: int,
     target_room_id: int,
-    photo_file_id: str,
-    comment: Optional[str]
+    photo_file_id: Optional[str] = None,
+    comment: Optional[str] = None
 ) -> Complaint:
     complaint = Complaint(
         coliving_id=coliving_id,
@@ -424,6 +453,8 @@ async def add_fine(
     await session.commit()
     await session.refresh(fine)
     return fine
+
+create_fine = add_fine
 
 
 async def get_user_by_id(session: AsyncSession, user_id: int) -> Optional[User]:
@@ -533,6 +564,17 @@ async def clear_user_fines(session: AsyncSession, user_id: int) -> float:
     user.unpaid_fines = 0.0
     await session.commit()
     return cleared
+
+
+async def get_unpaid_fines(session: AsyncSession, coliving_id: int) -> List[Fine]:
+    stmt = (
+        select(Fine)
+        .options(selectinload(Fine.user), selectinload(Fine.room))
+        .where(and_(Fine.coliving_id == coliving_id, Fine.is_paid == False))
+        .order_by(Fine.created_at.desc())
+    )
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
 
 
 async def update_coliving_info(
