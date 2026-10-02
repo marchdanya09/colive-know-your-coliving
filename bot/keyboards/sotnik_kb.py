@@ -45,12 +45,23 @@ def get_sotnik_panel_kb(pending_count: int, is_locked: bool) -> InlineKeyboardMa
             ],
             [
                 InlineKeyboardButton(
+                    text="🚪 Додати нову кімнату",
+                    callback_data="sotnik_add_room"
+                ),
+                InlineKeyboardButton(
+                    text="✏️ Змінити назву/адресу",
+                    callback_data="sotnik_edit_coliving"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="💬 Інструкція прив'язки групи",
                     callback_data="sotnik_group_guide"
                 )
             ]
         ]
     )
+
 
 def get_sotnik_members_kb(users: List[User]) -> InlineKeyboardMarkup:
     buttons = []

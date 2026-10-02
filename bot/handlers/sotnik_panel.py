@@ -1,5 +1,6 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from database.db import AsyncSessionLocal
@@ -60,9 +61,11 @@ async def render_sotnik_panel(message_or_call, tg_id: int):
         else:
             await message_or_call.answer(panel_text, reply_markup=kb)
 
+@router.message(Command("sotnik", "admin", "panel"))
 @router.message(F.text == texts.BTN_SOTNIK_PANEL)
 async def menu_sotnik_panel(message: Message):
     await render_sotnik_panel(message, message.from_user.id)
+
 
 @router.callback_query(F.data == "sotnik_back_panel")
 async def cb_sotnik_back(call: CallbackQuery):
@@ -300,6 +303,13 @@ class SotnikFineFSM(StatesGroup):
     waiting_for_custom_default_fine = State()
     waiting_for_room_fine_amount = State()
     waiting_for_room_fine_reason = State()
+    waiting_for_user_fine_amount = State()
+    waiting_for_user_fine_reason = State()
+    waiting_for_new_room_name = State()
+    waiting_for_new_room_capacity = State()
+    waiting_for_edit_coliving_name = State()
+    waiting_for_edit_coliving_address = State()
+
 
 
 # ----------------- КЕРУВАННЯ МЕШКАНЦЯМИ -----------------
@@ -677,4 +687,152 @@ async def cb_set_duty_direct(call: CallbackQuery):
 
     await call.answer(f"Черговою кімнатою призначено: {room.name}!", show_alert=True)
     await cb_duty_menu(call)
+
+
+# ----------------- НАРАХУВАННЯ ШТРАФУ КОРИСТУВАЧУ -----------------
+
+@router.callback_query(F.data.startswith("sotnik_fine_user_"))
+async def cb_fine_user_prompt(call: CallbackQuery, state: FSMContext):
+    target_user_id = int(call.data.replace("sotnik_fine_user_", ""))
+    async with AsyncSessionLocal() as session:
+        target_user = await crud.get_user_by_id(session, target_user_id)
+
+    await state.update_data(fine_target_user_id=target_user_id)
+    await state.set_state(SotnikFineFSM.waiting_for_user_fine_amount)
+    await call.message.edit_text(
+        f"💵 <b>Введіть суму штрафу в грн для {target_user.full_name}:</b>",
+        reply_markup=get_back_kb(f"sotnik_view_user_{target_user_id}", "◀️ Скасувати")
+    )
+    await call.answer()
+
+
+@router.message(SotnikFineFSM.waiting_for_user_fine_amount)
+async def process_user_fine_amount(message: Message, state: FSMContext):
+    try:
+        amt = float(message.text.strip())
+        if amt <= 0:
+            raise ValueError()
+    except ValueError:
+        await message.answer("⚠️ Введіть коректне додатне число:")
+        return
+
+    await state.update_data(fine_amount=amt)
+    await state.set_state(SotnikFineFSM.waiting_for_user_fine_reason)
+    await message.answer("✍️ <b>Вкажіть причину штрафу:</b>")
+
+
+@router.message(SotnikFineFSM.waiting_for_user_fine_reason)
+async def process_user_fine_reason(message: Message, state: FSMContext):
+    reason = message.text.strip()
+    data = await state.get_data()
+    user_id = data["fine_target_user_id"]
+    amount = data["fine_amount"]
+    await state.clear()
+
+    tg_id = message.from_user.id
+    async with AsyncSessionLocal() as session:
+        admin = await crud.get_user_by_tg_id(session, tg_id)
+        target_user = await crud.get_user_by_id(session, user_id)
+        await crud.add_fine(
+            session=session,
+            coliving_id=admin.coliving_id,
+            amount=amount,
+            reason=reason,
+            user_id=user_id
+        )
+
+        try:
+            await message.bot.send_message(
+                chat_id=target_user.telegram_id,
+                text=f"⚠️ <b>Вам нараховано штраф {amount} грн!</b>\nПричина: {reason}"
+            )
+        except Exception:
+            pass
+
+    await message.answer(f"✅ Штраф {amount} грн успішно нараховано користувачу {target_user.full_name}!")
+    await render_sotnik_panel(message, tg_id)
+
+
+# ----------------- ДОДАВАННЯ КІМНАТИ -----------------
+
+@router.callback_query(F.data == "sotnik_add_room")
+async def cb_add_room_prompt(call: CallbackQuery, state: FSMContext):
+    await state.set_state(SotnikFineFSM.waiting_for_new_room_name)
+    await call.message.edit_text(
+        "🚪 <b>Введіть назву нової кімнати (наприклад: Кімната 5 або Мансарда):</b>",
+        reply_markup=get_back_kb("sotnik_back_panel", "◀️ Скасувати")
+    )
+    await call.answer()
+
+
+@router.message(SotnikFineFSM.waiting_for_new_room_name)
+async def process_new_room_name(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name or len(name) > 50:
+        await message.answer("⚠️ Введіть коректну назву кімнати (до 50 символів):")
+        return
+    await state.update_data(new_room_name=name)
+    await state.set_state(SotnikFineFSM.waiting_for_new_room_capacity)
+    await message.answer("👥 <b>Скільки мешканців вміщує ця кімната? (число від 1 до 50):</b>")
+
+
+@router.message(SotnikFineFSM.waiting_for_new_room_capacity)
+async def process_new_room_capacity(message: Message, state: FSMContext):
+    text = message.text.strip()
+    if not text.isdigit() or not (1 <= int(text) <= 50):
+        await message.answer("⚠️ Введіть коректне число від 1 до 50:")
+        return
+
+    capacity = int(text)
+    data = await state.get_data()
+    room_name = data["new_room_name"]
+    await state.clear()
+
+    tg_id = message.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        room = await crud.add_room_to_coliving(session, user.coliving_id, room_name, capacity)
+
+    await message.answer(f"✅ Кімнату <b>{room.name}</b> (місткість: {capacity} осіб) успішно додано до колівінгу!")
+    await render_sotnik_panel(message, tg_id)
+
+
+# ----------------- РЕДАГУВАННЯ ДАНИХ КОЛІВІНГУ -----------------
+
+@router.callback_query(F.data == "sotnik_edit_coliving")
+async def cb_edit_coliving_prompt(call: CallbackQuery, state: FSMContext):
+    await state.set_state(SotnikFineFSM.waiting_for_edit_coliving_name)
+    await call.message.edit_text(
+        "✏️ <b>Введіть нову назву колівінгу (або '-' щоб залишити поточну):</b>",
+        reply_markup=get_back_kb("sotnik_back_panel", "◀️ Скасувати")
+    )
+    await call.answer()
+
+
+@router.message(SotnikFineFSM.waiting_for_edit_coliving_name)
+async def process_edit_coliving_name(message: Message, state: FSMContext):
+    name = message.text.strip()
+    await state.update_data(edit_coliving_name=name if name != "-" else None)
+    await state.set_state(SotnikFineFSM.waiting_for_edit_coliving_address)
+    await message.answer("📍 <b>Введіть нову адресу колівінгу (або '-' щоб залишити поточну):</b>")
+
+
+@router.message(SotnikFineFSM.waiting_for_edit_coliving_address)
+async def process_edit_coliving_address(message: Message, state: FSMContext):
+    addr = message.text.strip()
+    data = await state.get_data()
+    new_name = data.get("edit_coliving_name")
+    new_addr = addr if addr != "-" else None
+    await state.clear()
+
+    tg_id = message.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        coliving = await crud.update_coliving_info(session, user.coliving_id, name=new_name, address=new_addr)
+
+    await message.answer(
+        f"✅ Дані колівінгу оновлено!\n🏢 Назва: <b>{coliving.name}</b>\n📍 Адреса: <b>{coliving.address}</b>"
+    )
+    await render_sotnik_panel(message, tg_id)
+
 

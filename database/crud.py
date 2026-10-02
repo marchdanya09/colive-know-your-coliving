@@ -534,3 +534,45 @@ async def clear_user_fines(session: AsyncSession, user_id: int) -> float:
     await session.commit()
     return cleared
 
+
+async def update_coliving_info(
+    session: AsyncSession,
+    coliving_id: int,
+    name: Optional[str] = None,
+    address: Optional[str] = None
+) -> Optional[Coliving]:
+    coliving = await get_coliving_by_id(session, coliving_id)
+    if not coliving:
+        return None
+    if name is not None:
+        coliving.name = name.strip()
+    if address is not None:
+        coliving.address = address.strip()
+    await session.commit()
+    await session.refresh(coliving)
+    return coliving
+
+
+async def add_room_to_coliving(
+    session: AsyncSession,
+    coliving_id: int,
+    room_name: str,
+    capacity: int = 4
+) -> Room:
+    rooms = await get_rooms_with_users(session, coliving_id)
+    next_order = len(rooms) + 1
+    room = Room(
+        coliving_id=coliving_id,
+        name=room_name.strip(),
+        capacity=capacity,
+        rotation_order=next_order
+    )
+    session.add(room)
+    coliving = await get_coliving_by_id(session, coliving_id)
+    if coliving:
+        coliving.total_rooms = len(rooms) + 1
+    await session.commit()
+    await session.refresh(room)
+    return room
+
+

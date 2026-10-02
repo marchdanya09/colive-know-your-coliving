@@ -51,13 +51,29 @@ async def handle_start(message: Message, command: CommandObject, state: FSMConte
             coliving = await crud.get_coliving_by_id(session, user.coliving_id)
             is_sotnik = (user.role == "SOTNIK")
             webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={tg_id}&coliving_id={user.coliving_id}"
+            
+            nav_buttons = []
+            if is_sotnik:
+                nav_buttons.append([InlineKeyboardButton(text="👑 Відкрити Панель Сотника", callback_data="sotnik_back_panel")])
+            nav_buttons.append([
+                InlineKeyboardButton(text="🏠 Мій колівінг", callback_data="user_nav_my_coliving"),
+                InlineKeyboardButton(text="🚪 Моя кімната", callback_data="user_nav_my_room")
+            ])
+
+            role_title = "👑 Сотник (Адміністратор)" if is_sotnik else "🙋‍♂️ Мешканець"
             await message.answer(
                 f"👋 З поверненням, <b>{user.full_name}</b>!\n"
                 f"🏢 Колівінг: <b>{coliving.name if coliving else ''}</b>\n"
-                f"🚪 Кімната: <b>{user.room.name if user.room else 'Не призначено'}</b>",
+                f"🚪 Кімната: <b>{user.room.name if user.room else 'Не призначено'}</b>\n"
+                f"🏷 Ваша роль: <b>{role_title}</b>",
                 reply_markup=get_main_keyboard(is_sotnik=is_sotnik, webapp_url=webapp_url)
             )
+            await message.answer(
+                "⚡ <b>Швидкий перехід:</b>",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=nav_buttons)
+            )
             return
+
 
         # Якщо є аргумент deep-link (напр. ?start=join_XXXXX або ?start=XXXXX)
         if args:

@@ -80,6 +80,11 @@ async def menu_my_coliving(message: Message):
 
         directory_text = "\n".join(directory_lines)
 
+        inline_btns = []
+        if user.role == "SOTNIK":
+            inline_btns.append([InlineKeyboardButton(text="👑 Відкрити Панель Сотника", callback_data="sotnik_back_panel")])
+        inline_btns.append([InlineKeyboardButton(text="🔄 Оновити дані", callback_data="user_nav_my_coliving")])
+
         await message.answer(
             texts.MY_COLIVING_INFO.format(
                 name=coliving.name if coliving else "",
@@ -92,7 +97,7 @@ async def menu_my_coliving(message: Message):
                 duty_members_str=duty_members_str,
                 rooms_directory=directory_text
             ),
-            reply_markup=get_user_main_kb(user, tg_id)
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_btns)
         )
 
 # 1. 📅 Календар чергувань
@@ -170,6 +175,7 @@ async def menu_my_room(message: Message):
             members_lines.append(f"• <b>{u.full_name}</b>{username_part}{role_badge}{me_badge}")
 
         sotniks_str = ", ".join([s.full_name for s in sotniks]) if sotniks else "не призначено"
+        is_sotnik = (user.role == "SOTNIK")
 
         await message.answer(
             texts.MY_ROOM_INFO.format(
@@ -180,8 +186,19 @@ async def menu_my_room(message: Message):
                 members_list="\n".join(members_lines),
                 sotniks_list=sotniks_str
             ),
-            reply_markup=get_my_room_actions_kb()
+            reply_markup=get_my_room_actions_kb(is_sotnik=is_sotnik)
         )
+
+@router.callback_query(F.data == "user_nav_my_coliving")
+async def cb_nav_my_coliving(call: CallbackQuery):
+    await menu_my_coliving(call.message)
+    await call.answer()
+
+@router.callback_query(F.data == "user_nav_my_room")
+async def cb_nav_my_room(call: CallbackQuery):
+    await menu_my_room(call.message)
+    await call.answer()
+
 
 
 # Масова розсилка в ЛС кімнаті

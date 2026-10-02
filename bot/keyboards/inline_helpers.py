@@ -26,17 +26,21 @@ def get_rooms_selection_kb(rooms: List[Room], back_callback: str = "join_back_to
     buttons.append([InlineKeyboardButton(text="◀️ Назад до зміни імені", callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def get_my_room_actions_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✉️ Написати своїй кімнаті", callback_data="room_broadcast_prompt")
-            ],
-            [
-                InlineKeyboardButton(text="🚪 Залишити колівінг", callback_data="confirm_leave_coliving")
-            ]
+def get_my_room_actions_kb(is_sotnik: bool = False) -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton(text="✉️ Написати своїй кімнаті", callback_data="room_broadcast_prompt")
         ]
-    )
+    ]
+    if is_sotnik:
+        buttons.append([
+            InlineKeyboardButton(text="👑 Панель керування Сотника", callback_data="sotnik_back_panel")
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="🚪 Залишити колівінг", callback_data="confirm_leave_coliving")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 def get_role_selection_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
