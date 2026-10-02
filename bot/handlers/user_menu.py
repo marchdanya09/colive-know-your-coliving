@@ -1,5 +1,6 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, ContentType, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, ContentType, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from database.db import AsyncSessionLocal
@@ -12,12 +13,87 @@ import texts
 
 router = Router()
 
+def get_user_main_kb(user, tg_id: int):
+    is_sotnik = (user.role == "SOTNIK")
+    webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={tg_id}&coliving_id={user.coliving_id}" if user.coliving_id else None
+    return get_main_keyboard(is_sotnik=is_sotnik, webapp_url=webapp_url)
+
 class ComplaintState(StatesGroup):
     waiting_for_photo = State()
     waiting_for_comment = State()
 
 class RoomBroadcastState(StatesGroup):
     waiting_for_text = State()
+
+# Команда /menu для миттєвого оновлення кнопок меню
+@router.message(Command("menu"))
+async def cmd_menu(message: Message):
+    tg_id = message.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        if not user or not user.coliving_id or not user.is_approved:
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
+            return
+        await message.answer("📱 Головне меню оновлено!", reply_markup=get_user_main_kb(user, tg_id))
+
+# 0. 🏠 Мій колівінг (Каталог усього простору з усіма мешканцями та контактами)
+@router.message(F.text == texts.BTN_MY_COLIVING)
+async def menu_my_coliving(message: Message):
+    tg_id = message.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        if not user or not user.coliving_id or not user.is_approved:
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
+            return
+
+        coliving = await crud.get_coliving_by_id(session, user.coliving_id)
+        rooms = await crud.get_rooms_with_users(session, user.coliving_id)
+        sotniks = await crud.get_sotniks(session, user.coliving_id)
+        current_duty = await crud.get_current_duty(session, user.coliving_id)
+        members_count = await crud.count_residents(session, user.coliving_id)
+
+        duty_room_name = current_duty.room.name if (current_duty and current_duty.room) else "Не призначено"
+        if current_duty and current_duty.room and current_duty.room.users:
+            duty_members_str = ", ".join([u.full_name for u in current_duty.room.users])
+        else:
+            duty_members_str = "не призначено"
+
+        sotniks_str = ", ".join([
+            f"{s.full_name} (@{s.username})" if s.username else s.full_name
+            for s in sotniks
+        ]) if sotniks else "не призначено"
+
+        directory_lines = []
+        for r in rooms:
+            directory_lines.append(f"\n🚪 <b>{r.name}</b> ({len(r.users)}/{r.capacity} осіб):")
+            if not r.users:
+                directory_lines.append("  <i>(Кімната поки що порожня)</i>")
+            else:
+                for u in r.users:
+                    role_badge = " 👑 <i>Сотник</i>" if u.role == "SOTNIK" else ""
+                    me_badge = " 👈 <b>(Ви)</b>" if u.id == user.id else ""
+                    if u.username:
+                        contact_str = f"@{u.username}"
+                    else:
+                        contact_str = f'<a href="tg://user?id={u.telegram_id}">написати в ЛС</a>'
+                    directory_lines.append(f"  • <b>{u.full_name}</b> ({contact_str}){role_badge}{me_badge}")
+
+        directory_text = "\n".join(directory_lines)
+
+        await message.answer(
+            texts.MY_COLIVING_INFO.format(
+                name=coliving.name if coliving else "",
+                address=coliving.address if coliving else "",
+                members_count=members_count,
+                max_people=coliving.total_people if coliving else 0,
+                rooms_count=len(rooms),
+                sotniks_str=sotniks_str,
+                duty_room_name=duty_room_name,
+                duty_members_str=duty_members_str,
+                rooms_directory=directory_text
+            ),
+            reply_markup=get_user_main_kb(user, tg_id)
+        )
 
 # 1. 📅 Календар чергувань
 @router.message(F.text == texts.BTN_CALENDAR)
@@ -26,7 +102,7 @@ async def menu_calendar(message: Message):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
         if not user or not user.coliving_id or not user.is_approved:
-            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.")
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
             return
 
         coliving = await crud.get_coliving_by_id(session, user.coliving_id)
@@ -64,7 +140,8 @@ async def menu_calendar(message: Message):
                 current_members=members,
                 period_dates=dates_str,
                 upcoming_schedule=upcoming_str
-            )
+            ),
+            reply_markup=get_user_main_kb(user, tg_id)
         )
 
 # 2. 🚪 Моя кімната
@@ -74,7 +151,7 @@ async def menu_my_room(message: Message):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
         if not user or not user.coliving_id or not user.is_approved:
-            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.")
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
             return
 
         room = await crud.get_room_by_id(session, user.room_id) if user.room_id else None
@@ -82,7 +159,7 @@ async def menu_my_room(message: Message):
         sotniks = await crud.get_sotniks(session, user.coliving_id)
 
         if not room:
-            await message.answer("⚠️ Вас ще не розподілено в кімнату.")
+            await message.answer("⚠️ Вас ще не розподілено в кімнату.", reply_markup=get_user_main_kb(user, tg_id))
             return
 
         members_lines = []
@@ -105,6 +182,7 @@ async def menu_my_room(message: Message):
             ),
             reply_markup=get_my_room_actions_kb()
         )
+
 
 # Масова розсилка в ЛС кімнаті
 @router.callback_query(F.data == "room_broadcast_prompt")
@@ -188,12 +266,19 @@ async def cb_do_leave_coliving(call: CallbackQuery):
     async with AsyncSessionLocal() as session:
         await crud.remove_user_from_coliving(session, tg_id)
     await call.message.edit_text("🚪 Ви покинули колівінг. Щоб зареєструватися знову, скористайтесь /start.")
+    await call.message.answer("👋 Меню оновлено.", reply_markup=ReplyKeyboardRemove())
     await call.answer()
 
 # 3. 📋 Мої обов'язки
 @router.message(F.text == texts.BTN_DUTIES)
 async def menu_duties(message: Message):
-    await message.answer(texts.DUTIES_INFO)
+    tg_id = message.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        if not user or not user.coliving_id or not user.is_approved:
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
+            return
+        await message.answer(texts.DUTIES_INFO, reply_markup=get_user_main_kb(user, tg_id))
 
 # 4. 🚨 Термінові скарги
 @router.message(F.text == texts.BTN_URGENT_COMPLAINT)
@@ -206,7 +291,7 @@ async def menu_urgent_complaint(message: Message, state: FSMContext):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
         if not user or not user.coliving_id or not user.is_approved:
-            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.")
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
             return
 
     await state.set_state(ComplaintState.waiting_for_photo)
@@ -296,7 +381,7 @@ async def complaint_comment(message: Message, state: FSMContext):
             except Exception:
                 pass
 
-        await message.answer(texts.COMPLAINT_SENT_SUCCESS)
+        await message.answer(texts.COMPLAINT_SENT_SUCCESS, reply_markup=get_user_main_kb(user, tg_id))
 
 # 5. 💰 Штрафи
 @router.message(F.text == texts.BTN_FINES)
@@ -304,8 +389,8 @@ async def menu_fines(message: Message):
     tg_id = message.from_user.id
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
-        if not user or not user.coliving_id:
-            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.")
+        if not user or not user.coliving_id or not user.is_approved:
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
             return
 
         coliving = await crud.get_coliving_by_id(session, user.coliving_id)
@@ -321,5 +406,7 @@ async def menu_fines(message: Message):
                 treasury_balance=coliving.treasury_balance,
                 user_fines=user.unpaid_fines,
                 room_fines=room_fines_total
-            )
+            ),
+            reply_markup=get_user_main_kb(user, tg_id)
         )
+

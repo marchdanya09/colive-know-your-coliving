@@ -1,8 +1,10 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from typing import List, Optional
+from database.models import User, Room
 import texts
 
 def get_sotnik_panel_kb(pending_count: int, is_locked: bool) -> InlineKeyboardMarkup:
-    lock_label = "🔓 Відкрити прийом заявок" if is_locked else "🔒 Закрити прийом заявок"
+    lock_label = "🔓 Відкрити прийом" if is_locked else "🔒 Закрити прийом"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -13,21 +15,31 @@ def get_sotnik_panel_kb(pending_count: int, is_locked: bool) -> InlineKeyboardMa
             ],
             [
                 InlineKeyboardButton(
-                    text="➕ Додати мешканця",
-                    callback_data="sotnik_add_member"
+                    text="👥 Мешканці колівінгу",
+                    callback_data="sotnik_manage_members"
                 ),
                 InlineKeyboardButton(
-                    text=lock_label,
-                    callback_data="sotnik_toggle_lock"
+                    text="⚙️ Штрафи та каса",
+                    callback_data="sotnik_fines_menu"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🔄 Ротація чергувань",
-                    callback_data="sotnik_rotate_duty"
+                    text="🔄 Чергування та ротація",
+                    callback_data="sotnik_duty_menu"
                 ),
                 InlineKeyboardButton(
-                    text="🔑 Новий код колівінгу",
+                    text="➕ Додати мешканця",
+                    callback_data="sotnik_add_member"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=lock_label,
+                    callback_data="sotnik_toggle_lock"
+                ),
+                InlineKeyboardButton(
+                    text="🔑 Новий код",
                     callback_data="sotnik_regen_code"
                 )
             ],
@@ -39,6 +51,97 @@ def get_sotnik_panel_kb(pending_count: int, is_locked: bool) -> InlineKeyboardMa
             ]
         ]
     )
+
+def get_sotnik_members_kb(users: List[User]) -> InlineKeyboardMarkup:
+    buttons = []
+    for u in users:
+        role_icon = "👑 " if u.role == "SOTNIK" else "👤 "
+        room_label = f" ({u.room.name})" if u.room else ""
+        btn_text = f"{role_icon}{u.full_name}{room_label}"
+        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"sotnik_view_user_{u.id}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад до панелі сотника", callback_data="sotnik_back_panel")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_sotnik_user_card_kb(user: User, current_tg_id: int) -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton(text="🚪 Змінити кімнату", callback_data=f"sotnik_change_room_{user.id}")
+        ]
+    ]
+
+    # Кнопка підвищення / пониження Сотника (якщо це не сам користувач)
+    if user.role == "SOTNIK":
+        buttons.append([InlineKeyboardButton(text="👤 Зняти статус Сотника", callback_data=f"sotnik_toggle_role_{user.id}")])
+    else:
+        buttons.append([InlineKeyboardButton(text="👑 Призначити Сотником", callback_data=f"sotnik_toggle_role_{user.id}")])
+
+    buttons.append([
+        InlineKeyboardButton(text="💰 Нарахувати штраф", callback_data=f"sotnik_fine_user_{user.id}"),
+        InlineKeyboardButton(text="💸 Списати штрафи", callback_data=f"sotnik_clear_fines_{user.id}")
+    ])
+
+    # Не можна видалити самого себе через цю кнопку
+    if user.telegram_id != current_tg_id:
+        buttons.append([
+            InlineKeyboardButton(text="⛔ Видалити з колівінгу", callback_data=f"sotnik_kick_{user.id}")
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="◀️ Назад до списку мешканців", callback_data="sotnik_manage_members")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_sotnik_reassign_room_kb(user_id: int, rooms: List[Room], current_room_id: Optional[int]) -> InlineKeyboardMarkup:
+    buttons = []
+    for r in rooms:
+        count = len(r.users) if r.users else 0
+        is_cur = " (поточна)" if r.id == current_room_id else ""
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🚪 {r.name} ({count}/{r.capacity}){is_cur}",
+                callback_data=f"sotnik_set_room_{user_id}_{r.id}"
+            )
+        ])
+    buttons.append([InlineKeyboardButton(text="◀️ Скасувати", callback_data=f"sotnik_view_user_{user_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_sotnik_fines_kb(distribution: str, default_fine: float) -> InlineKeyboardMarkup:
+    dist_label = "⚖️ Тип: На всю кімнату 🔄" if distribution == "ROOM" else "⚖️ Тип: На людину 🔄"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=dist_label, callback_data="sotnik_toggle_fine_dist")
+            ],
+            [
+                InlineKeyboardButton(text="💵 50 грн", callback_data="sotnik_set_fine_50"),
+                InlineKeyboardButton(text="💵 100 грн", callback_data="sotnik_set_fine_100"),
+                InlineKeyboardButton(text="💵 200 грн", callback_data="sotnik_set_fine_200")
+            ],
+            [
+                InlineKeyboardButton(text="✏️ Ввести власну суму штрафу", callback_data="sotnik_custom_fine_prompt")
+            ],
+            [
+                InlineKeyboardButton(text="🏢 Оштрафувати кімнату", callback_data="sotnik_fine_room_select")
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Назад до панелі", callback_data="sotnik_back_panel")
+            ]
+        ]
+    )
+
+def get_sotnik_duty_kb(rooms: List[Room], current_room_id: Optional[int]) -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton(text="⚡ Перемкнути на наступну кімнату", callback_data="sotnik_rotate_duty")
+        ]
+    ]
+    for r in rooms:
+        status_icon = "🔥 Зараз чергує: " if r.id == current_room_id else "👉 Призначити: "
+        buttons.append([
+            InlineKeyboardButton(text=f"{status_icon}{r.name}", callback_data=f"sotnik_set_duty_{r.id}")
+        ])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад до панелі", callback_data="sotnik_back_panel")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_request_action_kb(request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -67,3 +170,4 @@ def get_add_member_kb() -> InlineKeyboardMarkup:
             ]
         ]
     )
+

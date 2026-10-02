@@ -1,17 +1,25 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
 from database.db import AsyncSessionLocal
 from database import crud
 from bot.keyboards.sotnik_kb import (
     get_sotnik_panel_kb,
     get_request_action_kb,
-    get_add_member_kb
+    get_add_member_kb,
+    get_sotnik_members_kb,
+    get_sotnik_user_card_kb,
+    get_sotnik_reassign_room_kb,
+    get_sotnik_fines_kb,
+    get_sotnik_duty_kb
 )
 from bot.keyboards.inline_helpers import get_back_kb
 from bot.keyboards.main_menu import get_main_keyboard
 from config import settings
 import texts
 import logging
+
 
 logger = logging.getLogger("CO:LIVE.sotnik")
 router = Router()
@@ -286,3 +294,387 @@ async def cb_group_guide(call: CallbackQuery):
     )
     await call.message.answer(guide_text, reply_markup=get_back_kb("sotnik_back_panel", "◀️ Назад до панелі"))
     await call.answer()
+
+
+class SotnikFineFSM(StatesGroup):
+    waiting_for_custom_default_fine = State()
+    waiting_for_room_fine_amount = State()
+    waiting_for_room_fine_reason = State()
+
+
+# ----------------- КЕРУВАННЯ МЕШКАНЦЯМИ -----------------
+
+@router.callback_query(F.data == "sotnik_manage_members")
+async def cb_manage_members(call: CallbackQuery):
+    tg_id = call.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        if not user or user.role != "SOTNIK":
+            await call.answer("Немає доступу", show_alert=True)
+            return
+
+        members = await crud.get_all_coliving_members(session, user.coliving_id)
+        if not members:
+            await call.answer("Немає зареєстрованих мешканців.", show_alert=True)
+            return
+
+        await call.message.edit_text(
+            texts.SOTNIK_MEMBERS_TITLE,
+            reply_markup=get_sotnik_members_kb(members)
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sotnik_view_user_"))
+async def cb_view_user(call: CallbackQuery):
+    target_user_id = int(call.data.replace("sotnik_view_user_", ""))
+    tg_id = call.from_user.id
+
+    async with AsyncSessionLocal() as session:
+        admin = await crud.get_user_by_tg_id(session, tg_id)
+        if not admin or admin.role != "SOTNIK":
+            await call.answer("Немає доступу", show_alert=True)
+            return
+
+        target_user = await crud.get_user_by_id(session, target_user_id)
+        if not target_user or target_user.coliving_id != admin.coliving_id:
+            await call.answer("Користувача не знайдено або він залишив колівінг.", show_alert=True)
+            await cb_manage_members(call)
+            return
+
+        username_str = f"@{target_user.username}" if target_user.username else f'<a href="tg://user?id={target_user.telegram_id}">написати в ЛС</a>'
+        role_badge = "👑 Сотник (Адміністратор)" if target_user.role == "SOTNIK" else "👤 Мешканець"
+        room_name = target_user.room.name if target_user.room else "Не призначено"
+
+        card_text = texts.SOTNIK_MEMBER_CARD.format(
+            full_name=target_user.full_name,
+            username_str=username_str,
+            room_name=room_name,
+            role_badge=role_badge,
+            fines=target_user.unpaid_fines
+        )
+
+        kb = get_sotnik_user_card_kb(target_user, tg_id)
+        await call.message.edit_text(card_text, reply_markup=kb)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sotnik_change_room_"))
+async def cb_change_room(call: CallbackQuery):
+    target_user_id = int(call.data.replace("sotnik_change_room_", ""))
+    tg_id = call.from_user.id
+
+    async with AsyncSessionLocal() as session:
+        admin = await crud.get_user_by_tg_id(session, tg_id)
+        target_user = await crud.get_user_by_id(session, target_user_id)
+        rooms = await crud.get_rooms_with_users(session, admin.coliving_id)
+
+        await call.message.edit_text(
+            f"🚪 <b>Оберіть нову кімнату для {target_user.full_name}:</b>",
+            reply_markup=get_sotnik_reassign_room_kb(target_user_id, rooms, target_user.room_id)
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sotnik_set_room_"))
+async def cb_set_room(call: CallbackQuery):
+    parts = call.data.split("_")
+    user_id = int(parts[3])
+    new_room_id = int(parts[4])
+
+    async with AsyncSessionLocal() as session:
+        await crud.update_user_room(session, user_id, new_room_id)
+        new_room = await crud.get_room_by_id(session, new_room_id)
+        user = await crud.get_user_by_id(session, user_id)
+
+        # Сповіщаємо мешканця
+        try:
+            await call.bot.send_message(
+                chat_id=user.telegram_id,
+                text=f"🚪 Сотник перемістив вас у кімнату: <b>{new_room.name}</b>!"
+            )
+        except Exception:
+            pass
+
+    await call.answer(f"Кімнату успішно змінено на {new_room.name}!", show_alert=True)
+    call.data = f"sotnik_view_user_{user_id}"
+    await cb_view_user(call)
+
+
+@router.callback_query(F.data.startswith("sotnik_toggle_role_"))
+async def cb_toggle_role(call: CallbackQuery):
+    user_id = int(call.data.replace("sotnik_toggle_role_", ""))
+    async with AsyncSessionLocal() as session:
+        success, msg, target_user = await crud.toggle_sotnik_role(session, user_id)
+        if success and target_user:
+            is_sotnik = (target_user.role == "SOTNIK")
+            try:
+                webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={target_user.telegram_id}&coliving_id={target_user.coliving_id}"
+                notif = (
+                    "👑 <b>Вам надано права Сотника колівінгу!</b> У вас з'явилася Панель Сотника."
+                    if is_sotnik
+                    else "👤 <b>Ваш статус оновлено:</b> тепер ви звичайний мешканець колівінгу."
+                )
+                await call.bot.send_message(
+                    chat_id=target_user.telegram_id,
+                    text=notif,
+                    reply_markup=get_main_keyboard(is_sotnik=is_sotnik, webapp_url=webapp_url)
+                )
+            except Exception:
+                pass
+
+    await call.answer(msg, show_alert=True)
+    call.data = f"sotnik_view_user_{user_id}"
+    await cb_view_user(call)
+
+
+@router.callback_query(F.data.startswith("sotnik_kick_"))
+async def cb_kick_prompt(call: CallbackQuery):
+    user_id = int(call.data.replace("sotnik_kick_", ""))
+    async with AsyncSessionLocal() as session:
+        target_user = await crud.get_user_by_id(session, user_id)
+
+    confirm_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⛔ Так, видалити", callback_data=f"sotnik_do_kick_{user_id}")],
+            [InlineKeyboardButton(text="◀️ Скасувати", callback_data=f"sotnik_view_user_{user_id}")]
+        ]
+    )
+    await call.message.edit_text(
+        f"⚠️ <b>Ви впевнені, що хочете видалити {target_user.full_name} з колівінгу?</b>\n"
+        "Користувач втратить доступ до колівінгу, а його місце в кімнаті буде звільнено.",
+        reply_markup=confirm_kb
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sotnik_do_kick_"))
+async def cb_do_kick(call: CallbackQuery):
+    user_id = int(call.data.replace("sotnik_do_kick_", ""))
+    async with AsyncSessionLocal() as session:
+        kicked = await crud.kick_user_from_coliving(session, user_id)
+        if kicked:
+            try:
+                await call.bot.send_message(
+                    chat_id=kicked.telegram_id,
+                    text="🚪 <b>Вас було виключено з колівінгу сотником.</b>",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+            except Exception:
+                pass
+
+    await call.answer("Мешканця успішно видалено з колівінгу!", show_alert=True)
+    await cb_manage_members(call)
+
+
+@router.callback_query(F.data.startswith("sotnik_clear_fines_"))
+async def cb_clear_fines(call: CallbackQuery):
+    user_id = int(call.data.replace("sotnik_clear_fines_", ""))
+    async with AsyncSessionLocal() as session:
+        cleared = await crud.clear_user_fines(session, user_id)
+
+    await call.answer(f"Списано штрафів на суму {cleared} грн!", show_alert=True)
+    call.data = f"sotnik_view_user_{user_id}"
+    await cb_view_user(call)
+
+
+# ----------------- НАЛАШТУВАННЯ ШТРАФІВ ТА КАСИ -----------------
+
+@router.callback_query(F.data == "sotnik_fines_menu")
+async def cb_fines_menu(call: CallbackQuery):
+    tg_id = call.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        coliving = await crud.get_coliving_by_id(session, user.coliving_id)
+
+        dist_label = "На всю кімнату" if coliving.fine_distribution == "ROOM" else "Персонально на людину"
+        text = texts.SOTNIK_FINES_PANEL_TEXT.format(
+            fine_amount=coliving.default_fine_amount,
+            fine_type_label=dist_label,
+            treasury_balance=coliving.treasury_balance
+        )
+        kb = get_sotnik_fines_kb(coliving.fine_distribution, coliving.default_fine_amount)
+        await call.message.edit_text(text, reply_markup=kb)
+    await call.answer()
+
+
+@router.callback_query(F.data == "sotnik_toggle_fine_dist")
+async def cb_toggle_fine_dist(call: CallbackQuery):
+    tg_id = call.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        coliving = await crud.get_coliving_by_id(session, user.coliving_id)
+        new_dist = "INDIVIDUAL" if coliving.fine_distribution == "ROOM" else "ROOM"
+        await crud.update_fine_settings(session, user.coliving_id, distribution=new_dist)
+
+    await call.answer(f"Тип розподілу змінено на: {'На кімнату' if new_dist == 'ROOM' else 'Персонально'}!", show_alert=True)
+    await cb_fines_menu(call)
+
+
+@router.callback_query(F.data.in_(["sotnik_set_fine_50", "sotnik_set_fine_100", "sotnik_set_fine_200"]))
+async def cb_set_preset_fine(call: CallbackQuery):
+    val = float(call.data.replace("sotnik_set_fine_", ""))
+    tg_id = call.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        await crud.update_fine_settings(session, user.coliving_id, default_fine=val)
+
+    await call.answer(f"Базовий штраф встановлено: {val} грн!", show_alert=True)
+    await cb_fines_menu(call)
+
+
+@router.callback_query(F.data == "sotnik_custom_fine_prompt")
+async def cb_custom_fine_prompt(call: CallbackQuery, state: FSMContext):
+    await state.set_state(SotnikFineFSM.waiting_for_custom_default_fine)
+    await call.message.edit_text(
+        "✏️ <b>Введіть бажаний новий розмір базового штрафу в гривнях (число, наприклад 75 або 150):</b>",
+        reply_markup=get_back_kb("sotnik_fines_menu", "◀️ Скасувати")
+    )
+    await call.answer()
+
+
+@router.message(SotnikFineFSM.waiting_for_custom_default_fine)
+async def process_custom_fine(message: Message, state: FSMContext):
+    text = message.text.strip()
+    try:
+        val = float(text)
+        if val < 0 or val > 50000:
+            raise ValueError()
+    except ValueError:
+        await message.answer("⚠️ Будь ласка, введіть числове значення від 0 до 50000:")
+        return
+
+    await state.clear()
+    tg_id = message.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        await crud.update_fine_settings(session, user.coliving_id, default_fine=val)
+
+    await message.answer(f"✅ Базовий розмір штрафу оновлено: <b>{val} грн</b>!")
+    await render_sotnik_panel(message, tg_id)
+
+
+# Ручне нарахування штрафу кімнаті
+@router.callback_query(F.data == "sotnik_fine_room_select")
+async def cb_fine_room_select(call: CallbackQuery):
+    tg_id = call.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        rooms = await crud.get_rooms_with_users(session, user.coliving_id)
+
+    buttons = []
+    for r in rooms:
+        buttons.append([InlineKeyboardButton(text=f"🚪 {r.name} ({len(r.users)} осіб)", callback_data=f"sotnik_fine_room_{r.id}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Скасувати", callback_data="sotnik_fines_menu")])
+
+    await call.message.edit_text(
+        "🏢 <b>Оберіть кімнату для нарахування штрафу:</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sotnik_fine_room_"))
+async def cb_fine_room_input(call: CallbackQuery, state: FSMContext):
+    room_id = int(call.data.replace("sotnik_fine_room_", ""))
+    await state.update_data(target_room_id=room_id)
+    await state.set_state(SotnikFineFSM.waiting_for_room_fine_amount)
+    await call.message.edit_text(
+        "💵 <b>Введіть суму штрафу для кімнати в грн:</b>",
+        reply_markup=get_back_kb("sotnik_fines_menu", "◀️ Скасувати")
+    )
+    await call.answer()
+
+
+@router.message(SotnikFineFSM.waiting_for_room_fine_amount)
+async def process_room_fine_amount(message: Message, state: FSMContext):
+    try:
+        amt = float(message.text.strip())
+        if amt <= 0:
+            raise ValueError()
+    except ValueError:
+        await message.answer("⚠️ Введіть коректне число більше 0:")
+        return
+
+    await state.update_data(fine_amount=amt)
+    await state.set_state(SotnikFineFSM.waiting_for_room_fine_reason)
+    await message.answer("✍️ <b>Вкажіть причину нарахування штрафу (наприклад: не винесене сміття):</b>")
+
+
+@router.message(SotnikFineFSM.waiting_for_room_fine_reason)
+async def process_room_fine_reason(message: Message, state: FSMContext):
+    reason = message.text.strip()
+    data = await state.get_data()
+    room_id = data["target_room_id"]
+    amount = data["fine_amount"]
+    await state.clear()
+
+    tg_id = message.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        room = await crud.get_room_by_id(session, room_id)
+        await crud.add_fine(
+            session=session,
+            coliving_id=user.coliving_id,
+            amount=amount,
+            reason=reason,
+            room_id=room_id
+        )
+
+        for m in room.users:
+            try:
+                await message.bot.send_message(
+                    chat_id=m.telegram_id,
+                    text=f"⚠️ <b>Вашій кімнаті ({room.name}) нараховано штраф {amount} грн!</b>\nПричина: {reason}"
+                )
+            except Exception:
+                pass
+
+    await message.answer(f"✅ Штраф {amount} грн успішно нараховано кімнаті {room.name}!")
+    await render_sotnik_panel(message, tg_id)
+
+
+# ----------------- КЕРУВАННЯ ЧЕРГУВАННЯМ -----------------
+
+@router.callback_query(F.data == "sotnik_duty_menu")
+async def cb_duty_menu(call: CallbackQuery):
+    tg_id = call.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        current_duty = await crud.get_current_duty(session, user.coliving_id)
+        rooms = await crud.get_rooms_with_users(session, user.coliving_id)
+
+        if current_duty and current_duty.room:
+            cur_name = current_duty.room.name
+            cur_members = ", ".join([u.full_name for u in current_duty.room.users]) if current_duty.room.users else "порожня"
+            period = f"{current_duty.start_date.strftime('%d.%m')} - {current_duty.end_date.strftime('%d.%m')}"
+            cur_id = current_duty.room_id
+        else:
+            cur_name = "Не призначено"
+            cur_members = "—"
+            period = "—"
+            cur_id = None
+
+        text = texts.SOTNIK_DUTY_PANEL_TEXT.format(
+            room_name=cur_name,
+            members=cur_members,
+            period=period
+        )
+        kb = get_sotnik_duty_kb(rooms, cur_id)
+        await call.message.edit_text(text, reply_markup=kb)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sotnik_set_duty_"))
+async def cb_set_duty_direct(call: CallbackQuery):
+    room_id = int(call.data.replace("sotnik_set_duty_", ""))
+    tg_id = call.from_user.id
+
+    async with AsyncSessionLocal() as session:
+        user = await crud.get_user_by_tg_id(session, tg_id)
+        await crud.set_current_duty_room(session, user.coliving_id, room_id)
+        room = await crud.get_room_by_id(session, room_id)
+
+    await call.answer(f"Черговою кімнатою призначено: {room.name}!", show_alert=True)
+    await cb_duty_menu(call)
+

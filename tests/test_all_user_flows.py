@@ -266,3 +266,112 @@ def test_rate_limiter_anti_spam():
     # 3. Ліміт розсилок по кімнаті (1 на 1 хв)
     assert limiter.can_broadcast_room(user_id) is True
     assert limiter.can_broadcast_room(user_id) is False
+
+
+@pytest.mark.asyncio
+async def test_sotnik_member_management(session: AsyncSession):
+    """Тест 8: Переміщення мешканців між кімнатами, зміна ролей, видалення (кік)."""
+    coliving, sotnik = await crud.create_coliving_with_rooms(
+        session=session,
+        name="CO:LIVE Admin Test",
+        address="вул. Хрещатик, 1",
+        total_people=8,
+        total_rooms=2,
+        creator_tg_id=7001,
+        creator_name="Головний Сотник",
+        creator_username="sotnik_chief"
+    )
+    rooms = await crud.get_rooms_with_users(session, coliving.id)
+
+    # Додаємо мешканця в кімнату 1
+    resident = await crud.create_user(
+        session=session,
+        tg_id=7002,
+        full_name="Богдан Мешканець",
+        username="bogdan_m",
+        role="RESIDENT",
+        coliving_id=coliving.id,
+        room_id=rooms[0].id,
+        is_approved=True
+    )
+
+    # 1. Переміщення в кімнату 2
+    await crud.update_user_room(session, resident.id, rooms[1].id)
+    updated_res = await crud.get_user_by_id(session, resident.id)
+    assert updated_res.room_id == rooms[1].id
+
+    # 2. Призначення другого Сотника
+    success, msg, promoted = await crud.toggle_sotnik_role(session, resident.id)
+    assert success is True
+    assert promoted.role == "SOTNIK"
+    sotniks = await crud.get_sotniks(session, coliving.id)
+    assert len(sotniks) == 2
+
+    # 3. Зняття ролі Сотника
+    success, msg, demoted = await crud.toggle_sotnik_role(session, resident.id)
+    assert success is True
+    assert demoted.role == "RESIDENT"
+
+    # 4. Спроба зняти роль з єдиного сотника (має бути заборонено)
+    success, msg, _ = await crud.toggle_sotnik_role(session, sotnik.id)
+    assert success is False
+    assert "єдиного сотника" in msg
+
+    # 5. Видалення мешканця (кік)
+    kicked = await crud.kick_user_from_coliving(session, resident.id)
+    assert kicked is not None
+    assert kicked.coliving_id is None
+    assert kicked.is_approved is False
+
+
+@pytest.mark.asyncio
+async def test_sotnik_fine_and_duty_settings(session: AsyncSession):
+    """Тест 9: Налаштування штрафів, зміна типу розподілу та пряме призначення чергової кімнати."""
+    coliving, _ = await crud.create_coliving_with_rooms(
+        session=session,
+        name="CO:LIVE Fines Test",
+        address="вул. Сковороди, 10",
+        total_people=8,
+        total_rooms=2,
+        creator_tg_id=8001,
+        creator_name="Сотник Фінансист",
+        creator_username="sotnik_fin"
+    )
+    rooms = await crud.get_rooms_with_users(session, coliving.id)
+    room2_id = rooms[1].id
+
+    # 1. Зміна суми штрафу та типу розподілу
+    c_updated = await crud.update_fine_settings(session, coliving.id, default_fine=150.0, distribution="INDIVIDUAL")
+    assert c_updated.default_fine_amount == 150.0
+    assert c_updated.fine_distribution == "INDIVIDUAL"
+
+    # 2. Пряме призначення чергової кімнати 2
+    new_duty = await crud.set_current_duty_room(session, coliving.id, room2_id)
+    assert new_duty.room_id == room2_id
+    assert new_duty.is_current is True
+
+    current_duty = await crud.get_current_duty(session, coliving.id)
+    assert current_duty.room_id == room2_id
+
+
+
+def test_main_keyboard_layout():
+    """Тест 10: Перевірка наявності кнопки 'Мій колівінг' та оновлення розмітки."""
+    from bot.keyboards.main_menu import get_main_keyboard
+    import texts
+
+    kb_resident = get_main_keyboard(is_sotnik=False)
+    resident_buttons = [btn.text for row in kb_resident.keyboard for btn in row]
+    assert texts.BTN_MY_COLIVING in resident_buttons
+    assert texts.BTN_MY_ROOM in resident_buttons
+    assert texts.BTN_CALENDAR in resident_buttons
+    assert texts.BTN_DUTIES in resident_buttons
+    assert texts.BTN_URGENT_COMPLAINT in resident_buttons
+    assert texts.BTN_FINES in resident_buttons
+    assert texts.BTN_SOTNIK_PANEL not in resident_buttons
+
+    kb_sotnik = get_main_keyboard(is_sotnik=True)
+    sotnik_buttons = [btn.text for row in kb_sotnik.keyboard for btn in row]
+    assert texts.BTN_MY_COLIVING in sotnik_buttons
+    assert texts.BTN_SOTNIK_PANEL in sotnik_buttons
+

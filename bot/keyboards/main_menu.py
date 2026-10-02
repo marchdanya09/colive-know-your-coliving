@@ -5,14 +5,15 @@ import texts
 def get_main_keyboard(is_sotnik: bool = False, webapp_url: Optional[str] = None) -> ReplyKeyboardMarkup:
     keyboard = [
         [
-            KeyboardButton(text=texts.BTN_CALENDAR),
+            KeyboardButton(text=texts.BTN_MY_COLIVING),
             KeyboardButton(text=texts.BTN_MY_ROOM)
         ],
         [
-            KeyboardButton(text=texts.BTN_DUTIES),
-            KeyboardButton(text=texts.BTN_URGENT_COMPLAINT)
+            KeyboardButton(text=texts.BTN_CALENDAR),
+            KeyboardButton(text=texts.BTN_DUTIES)
         ],
         [
+            KeyboardButton(text=texts.BTN_URGENT_COMPLAINT),
             KeyboardButton(text=texts.BTN_FINES)
         ]
     ]
@@ -34,3 +35,4 @@ def get_main_keyboard(is_sotnik: bool = False, webapp_url: Optional[str] = None)
         resize_keyboard=True,
         input_field_placeholder="Оберіть розділ меню..."
     )
+

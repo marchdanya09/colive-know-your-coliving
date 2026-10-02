@@ -424,3 +424,113 @@ async def add_fine(
     await session.commit()
     await session.refresh(fine)
     return fine
+
+
+async def get_user_by_id(session: AsyncSession, user_id: int) -> Optional[User]:
+    stmt = (
+        select(User)
+        .options(selectinload(User.room), selectinload(User.coliving))
+        .where(User.id == user_id)
+    )
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
+
+
+async def get_all_coliving_members(session: AsyncSession, coliving_id: int) -> List[User]:
+    stmt = (
+        select(User)
+        .options(selectinload(User.room))
+        .where(and_(User.coliving_id == coliving_id, User.is_approved == True))
+        .order_by(User.room_id.asc(), User.role.desc(), User.full_name.asc())
+    )
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
+
+async def kick_user_from_coliving(session: AsyncSession, user_id: int) -> Optional[User]:
+    user = await get_user_by_id(session, user_id)
+    if user:
+        user.coliving_id = None
+        user.room_id = None
+        user.is_approved = False
+        user.role = "RESIDENT"
+        await session.commit()
+        await session.refresh(user)
+        return user
+    return None
+
+
+async def toggle_sotnik_role(session: AsyncSession, user_id: int) -> Tuple[bool, str, Optional[User]]:
+    user = await get_user_by_id(session, user_id)
+    if not user or not user.coliving_id:
+        return False, "Користувача не знайдено.", None
+
+    if user.role == "SOTNIK":
+        # Перевіряємо чи це не єдиний сотник
+        sotniks = await get_sotniks(session, user.coliving_id)
+        if len(sotniks) <= 1:
+            return False, "Неможливо зняти права з єдиного сотника колівінгу!", user
+        user.role = "RESIDENT"
+        await session.commit()
+        await session.refresh(user)
+        return True, "Права сотника успішно відкликано (тепер звичайний мешканець).", user
+    else:
+        # Призначаємо сотником, перевіряємо ліміт (макс. 3)
+        sotniks = await get_sotniks(session, user.coliving_id)
+        if len(sotniks) >= settings.MAX_SOTNIKS_PER_COLIVING:
+            return False, f"Досягнуто ліміту сотників ({settings.MAX_SOTNIKS_PER_COLIVING} з {settings.MAX_SOTNIKS_PER_COLIVING})!", user
+        user.role = "SOTNIK"
+        await session.commit()
+        await session.refresh(user)
+        return True, "Користувачу успішно надано права Сотника! 👑", user
+
+
+async def update_fine_settings(
+    session: AsyncSession,
+    coliving_id: int,
+    default_fine: Optional[float] = None,
+    distribution: Optional[str] = None
+) -> Optional[Coliving]:
+    coliving = await get_coliving_by_id(session, coliving_id)
+    if not coliving:
+        return None
+    if default_fine is not None:
+        coliving.default_fine_amount = default_fine
+    if distribution is not None:
+        coliving.fine_distribution = distribution
+    await session.commit()
+    await session.refresh(coliving)
+    return coliving
+
+
+async def set_current_duty_room(session: AsyncSession, coliving_id: int, room_id: int) -> Optional[DutyCycle]:
+    # Деактивуємо всі поточні чергування
+    stmt = (
+        update(DutyCycle)
+        .where(and_(DutyCycle.coliving_id == coliving_id, DutyCycle.is_current == True))
+        .values(is_current=False)
+    )
+    await session.execute(stmt)
+
+    new_duty = DutyCycle(
+        coliving_id=coliving_id,
+        room_id=room_id,
+        start_date=date.today(),
+        end_date=date.today() + timedelta(days=7),
+        is_current=True
+    )
+    session.add(new_duty)
+    await session.commit()
+    await session.refresh(new_duty)
+    return new_duty
+
+
+async def clear_user_fines(session: AsyncSession, user_id: int) -> float:
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return 0.0
+    cleared = user.unpaid_fines
+    user.unpaid_fines = 0.0
+    await session.commit()
+    return cleared
+
