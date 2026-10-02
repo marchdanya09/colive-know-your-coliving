@@ -32,18 +32,20 @@ async def cmd_menu(message: Message):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
         if not user or not user.coliving_id or not user.is_approved:
-            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу. Скористайтеся /start для початку.")
             return
         await message.answer("📱 Головне меню оновлено!", reply_markup=get_user_main_kb(user, tg_id))
 
 # 0. 🏠 Мій колівінг (Каталог усього простору з усіма мешканцями та контактами)
-@router.message(F.text == texts.BTN_MY_COLIVING)
-async def menu_my_coliving(message: Message):
-    tg_id = message.from_user.id
+async def render_my_coliving(message_or_call, tg_id: int):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
         if not user or not user.coliving_id or not user.is_approved:
-            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
+            msg = "⚠️ Ви ще не є затвердженим мешканцем колівінгу."
+            if isinstance(message_or_call, CallbackQuery):
+                await message_or_call.answer(msg, show_alert=True)
+            else:
+                await message_or_call.answer(msg)
             return
 
         coliving = await crud.get_coliving_by_id(session, user.coliving_id)
@@ -83,22 +85,39 @@ async def menu_my_coliving(message: Message):
         inline_btns = []
         if user.role == "SOTNIK":
             inline_btns.append([InlineKeyboardButton(text="👑 Відкрити Панель Сотника", callback_data="sotnik_back_panel")])
-        inline_btns.append([InlineKeyboardButton(text="🔄 Оновити дані", callback_data="user_nav_my_coliving")])
+        inline_btns.append([
+            InlineKeyboardButton(text="🚪 Моя кімната", callback_data="user_nav_my_room"),
+            InlineKeyboardButton(text="🔄 Оновити дані", callback_data="user_nav_my_coliving")
+        ])
 
-        await message.answer(
-            texts.MY_COLIVING_INFO.format(
-                name=coliving.name if coliving else "",
-                address=coliving.address if coliving else "",
-                members_count=members_count,
-                max_people=coliving.total_people if coliving else 0,
-                rooms_count=len(rooms),
-                sotniks_str=sotniks_str,
-                duty_room_name=duty_room_name,
-                duty_members_str=duty_members_str,
-                rooms_directory=directory_text
-            ),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_btns)
+        kb = InlineKeyboardMarkup(inline_keyboard=inline_btns)
+        text = texts.MY_COLIVING_INFO.format(
+            name=coliving.name if coliving else "",
+            address=coliving.address if coliving else "",
+            members_count=members_count,
+            max_people=coliving.total_people if coliving else 0,
+            rooms_count=len(rooms),
+            sotniks_str=sotniks_str,
+            duty_room_name=duty_room_name,
+            duty_members_str=duty_members_str,
+            rooms_directory=directory_text
         )
+
+        if isinstance(message_or_call, CallbackQuery):
+            try:
+                await message_or_call.message.edit_text(text, reply_markup=kb)
+            except Exception:
+                try:
+                    await message_or_call.message.answer(text, reply_markup=kb)
+                except Exception:
+                    pass
+            await message_or_call.answer("Дані оновлено! 🔄")
+        else:
+            await message_or_call.answer(text, reply_markup=kb)
+
+@router.message(F.text == texts.BTN_MY_COLIVING)
+async def menu_my_coliving(message: Message):
+    await render_my_coliving(message, message.from_user.id)
 
 # 1. 📅 Календар чергувань
 @router.message(F.text == texts.BTN_CALENDAR)
@@ -107,7 +126,7 @@ async def menu_calendar(message: Message):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
         if not user or not user.coliving_id or not user.is_approved:
-            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.")
             return
 
         coliving = await crud.get_coliving_by_id(session, user.coliving_id)
@@ -150,13 +169,15 @@ async def menu_calendar(message: Message):
         )
 
 # 2. 🚪 Моя кімната
-@router.message(F.text == texts.BTN_MY_ROOM)
-async def menu_my_room(message: Message):
-    tg_id = message.from_user.id
+async def render_my_room(message_or_call, tg_id: int):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
         if not user or not user.coliving_id or not user.is_approved:
-            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
+            msg = "⚠️ Ви ще не є затвердженим мешканцем колівінгу."
+            if isinstance(message_or_call, CallbackQuery):
+                await message_or_call.answer(msg, show_alert=True)
+            else:
+                await message_or_call.answer(msg)
             return
 
         room = await crud.get_room_by_id(session, user.room_id) if user.room_id else None
@@ -164,7 +185,11 @@ async def menu_my_room(message: Message):
         sotniks = await crud.get_sotniks(session, user.coliving_id)
 
         if not room:
-            await message.answer("⚠️ Вас ще не розподілено в кімнату.", reply_markup=get_user_main_kb(user, tg_id))
+            msg = "⚠️ Вас ще не розподілено в кімнату."
+            if isinstance(message_or_call, CallbackQuery):
+                await message_or_call.answer(msg, show_alert=True)
+            else:
+                await message_or_call.answer(msg, reply_markup=get_user_main_kb(user, tg_id))
             return
 
         members_lines = []
@@ -177,27 +202,39 @@ async def menu_my_room(message: Message):
         sotniks_str = ", ".join([s.full_name for s in sotniks]) if sotniks else "не призначено"
         is_sotnik = (user.role == "SOTNIK")
 
-        await message.answer(
-            texts.MY_ROOM_INFO.format(
-                room_name=room.name,
-                coliving_name=coliving.name if coliving else "",
-                count=len(room.users),
-                capacity=room.capacity,
-                members_list="\n".join(members_lines),
-                sotniks_list=sotniks_str
-            ),
-            reply_markup=get_my_room_actions_kb(is_sotnik=is_sotnik)
+        text = texts.MY_ROOM_INFO.format(
+            room_name=room.name,
+            coliving_name=coliving.name if coliving else "",
+            count=len(room.users),
+            capacity=room.capacity,
+            members_list="\n".join(members_lines),
+            sotniks_list=sotniks_str
         )
+        kb = get_my_room_actions_kb(is_sotnik=is_sotnik)
+
+        if isinstance(message_or_call, CallbackQuery):
+            try:
+                await message_or_call.message.edit_text(text, reply_markup=kb)
+            except Exception:
+                try:
+                    await message_or_call.message.answer(text, reply_markup=kb)
+                except Exception:
+                    pass
+            await message_or_call.answer("Дані оновлено! 🔄")
+        else:
+            await message_or_call.answer(text, reply_markup=kb)
+
+@router.message(F.text == texts.BTN_MY_ROOM)
+async def menu_my_room(message: Message):
+    await render_my_room(message, message.from_user.id)
 
 @router.callback_query(F.data == "user_nav_my_coliving")
 async def cb_nav_my_coliving(call: CallbackQuery):
-    await menu_my_coliving(call.message)
-    await call.answer()
+    await render_my_coliving(call, call.from_user.id)
 
 @router.callback_query(F.data == "user_nav_my_room")
 async def cb_nav_my_room(call: CallbackQuery):
-    await menu_my_room(call.message)
-    await call.answer()
+    await render_my_room(call, call.from_user.id)
 
 
 
@@ -293,7 +330,7 @@ async def menu_duties(message: Message):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
         if not user or not user.coliving_id or not user.is_approved:
-            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.")
             return
         await message.answer(texts.DUTIES_INFO, reply_markup=get_user_main_kb(user, tg_id))
 
@@ -308,7 +345,7 @@ async def menu_urgent_complaint(message: Message, state: FSMContext):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
         if not user or not user.coliving_id or not user.is_approved:
-            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.")
             return
 
     await state.set_state(ComplaintState.waiting_for_photo)
@@ -407,7 +444,7 @@ async def menu_fines(message: Message):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
         if not user or not user.coliving_id or not user.is_approved:
-            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.", reply_markup=ReplyKeyboardRemove())
+            await message.answer("⚠️ Ви ще не є затвердженим мешканцем колівінгу.")
             return
 
         coliving = await crud.get_coliving_by_id(session, user.coliving_id)

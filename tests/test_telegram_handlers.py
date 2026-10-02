@@ -69,6 +69,7 @@ def make_mock_callback(user_id: int, data: str) -> MagicMock:
     call.data = data
     call.answer = AsyncMock()
     call.message = MagicMock(spec=Message)
+    call.message.from_user = TgUser(id=999, is_bot=True, first_name="CO:LIVE Bot", username="colive_test_bot")
     call.message.edit_text = AsyncMock()
     call.message.answer = AsyncMock()
     call.bot = AsyncMock()
@@ -203,3 +204,85 @@ async def test_navigation_back_buttons(memory_storage):
     await start.cb_role_back_to_start(call_back_res, state)
     call_back_res.message.edit_text.assert_called_once()
     assert "Оберіть вашу роль" in call_back_res.message.edit_text.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_user_menu_and_callback_navigation():
+    """Тест переходу в Мій колівінг, Моя кімната через повідомлення та CallbackQuery."""
+    sotnik_tg = 7777
+    async with AsyncSessionLocal() as session:
+        col, _ = await crud.create_coliving_with_rooms(
+            session=session,
+            name="Колівінг Сонце",
+            address="вул. Хрещатик, 1",
+            total_people=4,
+            total_rooms=2,
+            creator_tg_id=sotnik_tg,
+            creator_name="Сотник Дмитро"
+        )
+        rooms = await crud.get_rooms_with_users(session, col.id)
+        # Assign sotnik to room 1
+        sotnik_user = await crud.get_user_by_tg_id(session, sotnik_tg)
+        sotnik_user.room_id = rooms[0].id
+        await session.commit()
+
+    # 1. Запит через звичайне повідомлення (кнопка внизу)
+    msg = make_mock_message(sotnik_tg, texts.BTN_MY_COLIVING)
+    await user_menu.menu_my_coliving(msg)
+    msg.answer.assert_called_once()
+    reply_text = msg.answer.call_args[0][0]
+    assert "Колівінг Сонце" in reply_text
+    assert "Сотник Дмитро" in reply_text
+
+    # 2. Оновлення через інлайн-кнопку [🔄 Оновити дані]
+    # Нагадування: call.message.from_user має ID бота (999), а call.from_user має ID мешканця (7777)
+    call_refresh = make_mock_callback(sotnik_tg, "user_nav_my_coliving")
+    await user_menu.cb_nav_my_coliving(call_refresh)
+    call_refresh.message.edit_text.assert_called_once()
+    edit_text = call_refresh.message.edit_text.call_args[0][0]
+    assert "Колівінг Сонце" in edit_text
+    call_refresh.answer.assert_called_once_with("Дані оновлено! 🔄")
+
+    # 3. Перехід у "Моя кімната" через повідомлення
+    msg_room = make_mock_message(sotnik_tg, texts.BTN_MY_ROOM)
+    await user_menu.menu_my_room(msg_room)
+    msg_room.answer.assert_called_once()
+    assert "Кімната 1" in msg_room.answer.call_args[0][0]
+
+    # 4. Перехід у "Моя кімната" через інлайн-кнопку
+    call_room = make_mock_callback(sotnik_tg, "user_nav_my_room")
+    await user_menu.cb_nav_my_room(call_room)
+    call_room.message.edit_text.assert_called_once()
+    assert "Кімната 1" in call_room.message.edit_text.call_args[0][0]
+    call_room.answer.assert_called_once_with("Дані оновлено! 🔄")
+
+
+@pytest.mark.asyncio
+async def test_sotnik_panel_command_and_callbacks():
+    """Тест відкриття Панелі Сотника через команду та перемикання кнопок."""
+    sotnik_tg = 9991
+    async with AsyncSessionLocal() as session:
+        col, _ = await crud.create_coliving_with_rooms(
+            session=session,
+            name="Колівінг Затишок",
+            address="вул. Басейна, 5",
+            total_people=6,
+            total_rooms=3,
+            creator_tg_id=sotnik_tg,
+            creator_name="Сотник Іван"
+        )
+
+    # 1. Відкриття через /panel
+    msg_cmd = make_mock_message(sotnik_tg, "/panel")
+    await sotnik_panel.menu_sotnik_panel(msg_cmd)
+    # Повинні бути надіслані 2 відповіді: оновлення клавіатури і сама панель
+    assert msg_cmd.answer.call_count == 2
+    last_text = msg_cmd.answer.call_args[0][0]
+    assert "Панель керування Сотника" in last_text or "Колівінг Затишок" in last_text
+
+    # 2. Повернення назад до панелі через callback
+    call_back = make_mock_callback(sotnik_tg, "sotnik_back_panel")
+    await sotnik_panel.cb_sotnik_back(call_back)
+    call_back.message.edit_text.assert_called_once()
+    assert "Панель керування Сотника" in call_back.message.edit_text.call_args[0][0]
+

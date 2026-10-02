@@ -29,7 +29,11 @@ def get_rooms_selection_kb(rooms: List[Room], back_callback: str = "join_back_to
 def get_my_room_actions_kb(is_sotnik: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [
-            InlineKeyboardButton(text="✉️ Написати своїй кімнаті", callback_data="room_broadcast_prompt")
+            InlineKeyboardButton(text="✉️ Написати своїй кімнаті", callback_data="room_broadcast_prompt"),
+            InlineKeyboardButton(text="🔄 Оновити", callback_data="user_nav_my_room")
+        ],
+        [
+            InlineKeyboardButton(text="🏠 Весь колівінг", callback_data="user_nav_my_coliving")
         ]
     ]
     if is_sotnik:

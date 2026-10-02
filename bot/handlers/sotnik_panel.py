@@ -64,6 +64,13 @@ async def render_sotnik_panel(message_or_call, tg_id: int):
 @router.message(Command("sotnik", "admin", "panel"))
 @router.message(F.text == texts.BTN_SOTNIK_PANEL)
 async def menu_sotnik_panel(message: Message):
+    tg_id = message.from_user.id
+    if message.text and message.text.startswith("/"):
+        async with AsyncSessionLocal() as session:
+            user = await crud.get_user_by_tg_id(session, tg_id)
+            if user and user.role == "SOTNIK":
+                webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={tg_id}&coliving_id={user.coliving_id}" if user.coliving_id else None
+                await message.answer("👑 Панель Сотника відкрита.", reply_markup=get_main_keyboard(is_sotnik=True, webapp_url=webapp_url))
     await render_sotnik_panel(message, message.from_user.id)
 
 
