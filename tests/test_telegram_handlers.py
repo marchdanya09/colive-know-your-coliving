@@ -5,19 +5,42 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage, StorageKey
 from aiogram.types import User as TgUser, Chat, Message, CallbackQuery
 
-from database.db import Base, AsyncSessionLocal, engine
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from database.db import Base
+import database.db as db_mod
 from database import crud
 from bot.handlers import start, user_menu, sotnik_panel
 from config import settings
 import texts
 
+TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
+AsyncSessionLocal = None
+
 @pytest_asyncio.fixture(autouse=True)
-async def init_test_db():
-    async with engine.begin() as conn:
+async def init_test_db(monkeypatch):
+    global AsyncSessionLocal
+    test_engine = create_async_engine(TEST_DB_URL, echo=False)
+    test_session_factory = async_sessionmaker(
+        bind=test_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autoflush=False
+    )
+    AsyncSessionLocal = test_session_factory
+    monkeypatch.setattr(db_mod, "engine", test_engine)
+    monkeypatch.setattr(db_mod, "AsyncSessionLocal", test_session_factory)
+    monkeypatch.setattr(start, "AsyncSessionLocal", test_session_factory)
+    monkeypatch.setattr(user_menu, "AsyncSessionLocal", test_session_factory)
+    monkeypatch.setattr(sotnik_panel, "AsyncSessionLocal", test_session_factory)
+
+    async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
-    async with engine.begin() as conn:
+    async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+    await test_engine.dispose()
+
+
 
 @pytest.fixture
 def memory_storage():
