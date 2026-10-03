@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     BOT_TOKEN: str = "YOUR_BOT_TOKEN_HERE"
     SUPER_ADMIN_ID: int = 0
     WEBAPP_HOST: str = "0.0.0.0"
-    WEBAPP_PORT: int = 8000
+    WEBAPP_PORT: int = int(os.getenv("PORT", os.getenv("WEBAPP_PORT", "8000")))
     WEBAPP_BASE_URL: str = "https://your-domain-or-ngrok.com"
     DATABASE_URL: str = "sqlite+aiosqlite:///colive.db"
     
