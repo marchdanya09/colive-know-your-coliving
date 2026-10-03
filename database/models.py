@@ -4,7 +4,7 @@ from datetime import datetime, date, timezone
 from database.db import Base
 
 def utc_now():
-    return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 class Coliving(Base):
     __tablename__ = "colivings"

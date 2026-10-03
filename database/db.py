@@ -13,14 +13,15 @@ if "postgresql" in db_url or "postgres://" in db_url:
     elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+asyncpg://"):
         db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-    # Neon і Supabase додають ?sslmode=require, який asyncpg не приймає напряму в URL
-    if "sslmode=" in db_url:
+    # Neon і Supabase додають ?sslmode=require&channel_binding=require, які asyncpg не приймає напряму в URL
+    if "?" in db_url:
         parsed = urllib.parse.urlparse(db_url)
         query_params = urllib.parse.parse_qs(parsed.query)
-        ssl_val = query_params.pop("sslmode", [None])[0]
-        if ssl_val and ssl_val.lower() in ["require", "verify-ca", "verify-full", "true"]:
+        ssl_val = query_params.pop("sslmode", [None])[0] or query_params.pop("ssl", [None])[0]
+        query_params.pop("channel_binding", None)
+        if ssl_val and str(ssl_val).lower() in ["require", "verify-ca", "verify-full", "true"]:
             connect_args["ssl"] = "require"
-        new_query = urllib.parse.urlencode({k: v[0] for k, v in query_params.items()})
+        new_query = urllib.parse.urlencode({k: v[0] for k, v in query_params.items() if k not in ["sslmode", "channel_binding"]})
         db_url = urllib.parse.urlunparse(parsed._replace(query=new_query))
 
 engine = create_async_engine(db_url, connect_args=connect_args, echo=False)
