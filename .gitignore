@@ -28,6 +28,7 @@ wheels/
 *.sqlite
 *.sqlite3
 *.db
+!colive.db
 .env
 
 # Logs & OS
