@@ -48,6 +48,13 @@ MENU_BUTTONS = {
 # Команда /menu для миттєвого оновлення кнопок меню
 @router.message(Command("menu"))
 async def cmd_menu(message: Message):
+    if message.chat.type != "private":
+        bot_info = await message.bot.get_me()
+        await message.reply(
+            f"📱 Особисте меню колівінгу доступне в особистих повідомленнях з ботом 👉 @{bot_info.username}"
+        )
+        return
+
     tg_id = message.from_user.id
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
@@ -160,12 +167,12 @@ async def render_my_coliving(message_or_call, tg_id: int):
         else:
             await message_or_call.answer(text, reply_markup=kb)
 
-@router.message(F.text == texts.BTN_MY_COLIVING)
+@router.message(F.chat.type == "private", F.text == texts.BTN_MY_COLIVING)
 async def menu_my_coliving(message: Message):
     await render_my_coliving(message, message.from_user.id)
 
 # 1. 📅 Календар чергувань
-@router.message(F.text == texts.BTN_CALENDAR)
+@router.message(F.chat.type == "private", F.text == texts.BTN_CALENDAR)
 async def menu_calendar(message: Message):
     tg_id = message.from_user.id
     async with AsyncSessionLocal() as session:
@@ -275,7 +282,7 @@ async def render_my_room(message_or_call, tg_id: int):
         else:
             await message_or_call.answer(text, reply_markup=kb)
 
-@router.message(F.text == texts.BTN_MY_ROOM)
+@router.message(F.chat.type == "private", F.text == texts.BTN_MY_ROOM)
 async def menu_my_room(message: Message):
     await render_my_room(message, message.from_user.id)
 
@@ -739,7 +746,7 @@ async def render_duties_page(message_or_call, tg_id: int):
         else:
             await message_or_call.answer(text, reply_markup=kb)
 
-@router.message(F.text == texts.BTN_DUTIES)
+@router.message(F.chat.type == "private", F.text == texts.BTN_DUTIES)
 async def menu_duties(message: Message):
     await render_duties_page(message, message.from_user.id)
 
@@ -841,7 +848,7 @@ async def submit_complaint(
         return True, "Скаргу успішно надіслано!"
 
 
-@router.message(F.text == texts.BTN_URGENT_COMPLAINT)
+@router.message(F.chat.type == "private", F.text == texts.BTN_URGENT_COMPLAINT)
 async def menu_urgent_complaint(message: Message, state: FSMContext):
     tg_id = message.from_user.id
     if not rate_limiter.can_send_complaint(tg_id):
@@ -927,7 +934,7 @@ async def process_complaint_comment_step(message: Message, state: FSMContext):
     await message.answer(texts.COMPLAINT_SENT_SUCCESS)
 
 # 5. 💰 Штрафи
-@router.message(F.text == texts.BTN_FINES)
+@router.message(F.chat.type == "private", F.text == texts.BTN_FINES)
 async def menu_fines(message: Message):
     tg_id = message.from_user.id
     async with AsyncSessionLocal() as session:

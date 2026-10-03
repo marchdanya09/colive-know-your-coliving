@@ -179,6 +179,15 @@ async def link_group_to_coliving(session: AsyncSession, coliving_id: int, chat_i
     await session.execute(stmt)
     await session.commit()
 
+async def get_coliving_by_chat_id(session: AsyncSession, chat_id: int) -> Optional[Coliving]:
+    stmt = (
+        select(Coliving)
+        .options(selectinload(Coliving.rooms).selectinload(Room.users), selectinload(Coliving.users))
+        .where(Coliving.group_chat_id == chat_id)
+    )
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
+
 async def update_coliving_topics(
     session: AsyncSession,
     coliving_id: int,

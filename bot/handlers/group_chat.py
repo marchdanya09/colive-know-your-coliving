@@ -599,6 +599,14 @@ async def cmd_tag_all(message: Message):
 async def cmd_tag_sotnik(message: Message):
     await handle_tag_sotnik(message)
 
+@router.message(Command("panel", "admin"))
+async def cmd_admin_in_group(message: Message):
+    bot_info = await message.bot.get_me()
+    await message.reply(
+        f"🔒 <b>Панель Сотника та налаштування колівінгу доступні виключно в особистих повідомленнях з ботом!</b>\n"
+        f"Перейдіть у чат з ботом 👉 @{bot_info.username}"
+    )
+
 @router.message(Command("duty", "чергові"))
 async def cmd_duty_info(message: Message):
     await show_group_duty(message)

@@ -44,6 +44,29 @@ async def handle_start(message: Message, command: CommandObject, state: FSMConte
     tg_id = message.from_user.id
     args = command.args
 
+    # Реєстрація колівінгу та мешканців — ВИКЛЮЧНО в особистих повідомленнях (private)
+    if message.chat.type != "private":
+        bot_info = await message.bot.get_me()
+        bot_username = bot_info.username
+        async with AsyncSessionLocal() as session:
+            coliving = await crud.get_coliving_by_chat_id(session, message.chat.id)
+            if coliving:
+                await message.reply(
+                    f"🏢 Цей чат прив'язано до колівінгу <b>«{coliving.name}»</b>.\n\n"
+                    f"Реєстрація мешканців, вибір кімнати та панель Сотника доступні "
+                    f"<b>виключно в особистих повідомленнях бота</b> 👉 @{bot_username}"
+                )
+            else:
+                await message.reply(
+                    f"ℹ️ <b>Налаштування чату колівінгу CO:LIVE</b>\n\n"
+                    f"1. Реєстрація або створення колівінгу здійснюється <b>виключно в особистих повідомленнях бота</b> 👉 @{bot_username}\n"
+                    f"2. Щоб підключити цей чат до вашого створеного колівінгу, Сотник має надіслати команду:\n"
+                    f"   <code>/link_group [КОД_КОЛІВІНГУ]</code>\n"
+                    f"   (наприклад: <code>/link_group 4OscpBTai</code>)\n"
+                    f"3. Для створення системних тем («Скарги», «Чиє?», «Оголошення») введіть: <code>/create-topics</code>."
+                )
+        return
+
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, tg_id)
 
@@ -84,6 +107,15 @@ async def handle_start(message: Message, command: CommandObject, state: FSMConte
 
     # Якщо новий користувач — показуємо вибір ролі
     await message.answer(texts.WELCOME_START, reply_markup=get_role_selection_kb())
+
+# Блокування спроб реєстрації всередині групових чатів
+@router.callback_query(F.message.chat.type.in_(["group", "supergroup"]))
+async def cb_ignore_group_start(call: CallbackQuery):
+    await call.answer("Реєстрація та налаштування колівінгу доступні виключно в особистих повідомленнях з ботом!", show_alert=True)
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
 
 # Повернення назад до головного вибору ролі
 @router.callback_query(F.data == "role_back_to_start")

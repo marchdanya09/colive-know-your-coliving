@@ -65,6 +65,14 @@ async def render_sotnik_panel(message_or_call, tg_id: int):
 @router.message(Command("sotnik", "admin", "panel"))
 @router.message(F.text == texts.BTN_SOTNIK_PANEL)
 async def menu_sotnik_panel(message: Message):
+    if message.chat.type != "private":
+        bot_info = await message.bot.get_me()
+        await message.reply(
+            f"🔒 <b>Панель Сотника доступна виключно в особистих повідомленнях з ботом!</b>\n"
+            f"Перейдіть у чат з ботом 👉 @{bot_info.username}"
+        )
+        return
+
     tg_id = message.from_user.id
     if message.text and message.text.startswith("/"):
         async with AsyncSessionLocal() as session:
@@ -74,6 +82,15 @@ async def menu_sotnik_panel(message: Message):
                 await message.answer("👑 Панель Сотника відкрита.", reply_markup=get_main_keyboard(is_sotnik=True, webapp_url=webapp_url))
     await render_sotnik_panel(message, message.from_user.id)
 
+
+# Блокування спроб відкриття панелі сотника у групах
+@router.callback_query(F.message.chat.type.in_(["group", "supergroup"]))
+async def cb_ignore_group_sotnik(call: CallbackQuery):
+    await call.answer("Панель Сотника доступна виключно в особистих повідомленнях з ботом!", show_alert=True)
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
 
 @router.callback_query(F.data == "sotnik_back_panel")
 async def cb_sotnik_back(call: CallbackQuery):

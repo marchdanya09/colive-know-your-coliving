@@ -511,3 +511,28 @@ async def test_announcements_topic_guard_and_publishing():
     assert "Сьогодні о 20:00 дивимось фільм на кухні!" in general_call.kwargs.get("text")
 
 
+@pytest.mark.asyncio
+async def test_start_in_group_chat_and_admin_redirection():
+    from bot.handlers import start
+    from aiogram.filters import CommandObject
+    
+    chat_id = -1009999
+    user_id = 77777
+    msg = make_mock_group_message(user_id=user_id, chat_id=chat_id, text="/start")
+    msg.bot.get_me = AsyncMock(return_value=TgUser(id=1, is_bot=True, first_name="Bot", username="colive_clean_bot"))
+    state = AsyncMock()
+
+    # 1. /start у неприв'язаній групі
+    await start.handle_start(msg, CommandObject(prefix="/", command="start", args=None), state)
+    msg.reply.assert_called_once()
+    assert "Налаштування чату колівінгу CO:LIVE" in msg.reply.call_args[0][0]
+    assert "виключно в особистих повідомленнях" in msg.reply.call_args[0][0]
+
+    # 2. /admin або /panel у групі
+    msg_admin = make_mock_group_message(user_id=user_id, chat_id=chat_id, text="/panel")
+    msg_admin.bot.get_me = AsyncMock(return_value=TgUser(id=1, is_bot=True, first_name="Bot", username="colive_clean_bot"))
+    await group_chat.cmd_admin_in_group(msg_admin)
+    msg_admin.reply.assert_called_once()
+    assert "Панель Сотника та налаштування колівінгу доступні виключно в особистих повідомленнях" in msg_admin.reply.call_args[0][0]
+
+
