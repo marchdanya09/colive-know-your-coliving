@@ -79,17 +79,35 @@ def parse_announcement_command(raw_text: str):
     return False, ""
 
 
-def is_create_topics_command(message: Message) -> bool:
-    text = (message.text or "").strip().lower()
-    first_word = text.split()[0] if text else ""
-    first_word = first_word.split("@")[0]
+def is_create_topics_command(val: Any) -> bool:
+    if not val:
+        return False
+    if isinstance(val, Message):
+        raw = val.text or ""
+    elif isinstance(val, str):
+        raw = val
+    else:
+        return False
+    parts = raw.strip().lower().split()
+    if not parts:
+        return False
+    first_word = parts[0].split("@")[0]
     return first_word in ["/create_topics", "/create-topics", "/створити_топіки", "/створити-топіки", "/topics"]
 
 
-def is_announcement_command(message: Message) -> bool:
-    text = (message.text or message.caption or "").strip().lower()
-    first_word = text.split()[0] if text else ""
-    first_word = first_word.split("@")[0]
+def is_announcement_command(val: Any) -> bool:
+    if not val:
+        return False
+    if isinstance(val, Message):
+        raw = val.text or val.caption or ""
+    elif isinstance(val, str):
+        raw = val
+    else:
+        return False
+    parts = raw.strip().lower().split()
+    if not parts:
+        return False
+    first_word = parts[0].split("@")[0]
     return first_word in ["/оголошення", "/announcement", "/announce", "/объявление", "/advert"]
 
 
@@ -221,7 +239,7 @@ async def handle_announcements_topic_message(message: Message, coliving: Colivin
 # 0. Створення топіків (/create-topics)
 # -------------------------------------------------------------
 
-@router.message(F.text.func(is_create_topics_command))
+@router.message(is_create_topics_command)
 async def cmd_create_topics(message: Message):
     if message.chat.type not in ["group", "supergroup"]:
         await message.reply("⚠️ Цю команду потрібно виконувати в груповому чаті колівінгу.")
@@ -369,7 +387,7 @@ async def cmd_create_topics(message: Message):
 # 0.1 Оголошення з будь-якої точки чату (/оголошення)
 # -------------------------------------------------------------
 
-@router.message(F.text.func(is_announcement_command) | F.caption.func(is_announcement_command))
+@router.message(is_announcement_command)
 async def cmd_announcement(message: Message):
     if message.chat.type not in ["group", "supergroup"]:
         return
@@ -1151,3 +1169,37 @@ async def on_user_join_group(event: ChatMemberUpdated):
                 )
             except Exception:
                 pass
+
+
+@router.message(F.new_chat_members)
+async def on_new_chat_members_message(message: Message):
+    bot_info = await message.bot.get_me()
+    added_bot = next((u for u in (message.new_chat_members or []) if u.id == bot_info.id), None)
+    if not added_bot:
+        return
+
+    chat_id = message.chat.id
+    async with AsyncSessionLocal() as session:
+        coliving = await get_coliving_by_chat_id(session, chat_id)
+
+    if coliving:
+        welcome_text = (
+            f"👋 <b>Привіт усім! Я бот колівінгу «{coliving.name}».</b>\n\n"
+            "Чат успішно розпізнано! Для створення гілок форуму («Скарги», «Чиє?», «Оголошення») "
+            "напишіть команду <code>/create-topics</code>.\n"
+            "Довідка з усіх команд: <code>/help</code>"
+        )
+    else:
+        welcome_text = (
+            "👋 <b>Привіт усім! Я бот для управління простором CO:LIVE.</b>\n\n"
+            "👑 <b>Сотнику або адміністратору для налаштування чату:</b>\n"
+            "1. Надайте боту права <b>Адміністратора</b> групи (з правом керування темами/топіками).\n"
+            "2. Напишіть команду прив'язки чату:\n"
+            "   <code>/link_group [КОД_КОЛІВІНГУ]</code> (наприклад: <code>/link_group 4OscpBTai</code>)\n"
+            "3. Для автоматичного створення топіків («Скарги», «Чиє?», «Оголошення») напишіть:\n"
+            "   <code>/create-topics</code>\n\n"
+            "ℹ️ Довідка: <code>/help</code>"
+        )
+
+    await message.answer(welcome_text)
+

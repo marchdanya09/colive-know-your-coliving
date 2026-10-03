@@ -50,7 +50,8 @@ async def main():
     @dp.error()
     async def global_error_handler(event: ErrorEvent):
         logger.error(f"Непередбачена помилка: {event.exception}", exc_info=True)
-        if event.update and event.update.message:
+        # Відповідаємо повідомленням про помилку лише в особистих повідомленнях (private chat)
+        if event.update and event.update.message and event.update.message.chat and event.update.message.chat.type == "private":
             try:
                 await event.update.message.answer(
                     "⚠️ Сталася неочікувана помилка під час обробки вашого запиту. Спробуйте ще раз або введіть /start."
