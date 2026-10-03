@@ -20,7 +20,7 @@ router = Router()
 
 def get_user_main_kb(user, tg_id: int):
     is_sotnik = (user.role == "SOTNIK")
-    webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={tg_id}&coliving_id={user.coliving_id}" if user.coliving_id else None
+    webapp_url = settings.get_webapp_url(user_id=tg_id, coliving_id=user.coliving_id) if user.coliving_id else None
     return get_main_keyboard(is_sotnik=is_sotnik, webapp_url=webapp_url)
 
 class ComplaintState(StatesGroup):

@@ -51,7 +51,7 @@ async def handle_start(message: Message, command: CommandObject, state: FSMConte
         if user and user.is_approved and user.coliving_id:
             coliving = await crud.get_coliving_by_id(session, user.coliving_id)
             is_sotnik = (user.role == "SOTNIK")
-            webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={tg_id}&coliving_id={user.coliving_id}"
+            webapp_url = settings.get_webapp_url(user_id=tg_id, coliving_id=user.coliving_id)
             
             nav_buttons = []
             if is_sotnik:
@@ -213,7 +213,7 @@ async def wizard_sotnik_name(message: Message, state: FSMContext):
             creator_username=username
         )
         invite_link = f"https://t.me/{bot_username}?start=join_{coliving.invite_code}"
-        webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={tg_id}&coliving_id={coliving.id}"
+        webapp_url = settings.get_webapp_url(user_id=tg_id, coliving_id=coliving.id)
 
         await message.answer(
             texts.COLIVING_CREATED_SUCCESS.format(

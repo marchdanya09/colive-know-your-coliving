@@ -71,6 +71,20 @@ async def main():
     # Запуск щотижневого планувальника
     setup_scheduler(bot)
 
+    # Встановлення кнопки меню для Web App у Telegram
+    try:
+        from aiogram.types import MenuButtonWebApp, WebAppInfo
+        app_url = settings.get_webapp_url()
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="📱 CO:LIVE",
+                web_app=WebAppInfo(url=app_url)
+            )
+        )
+        logger.info(f"Встановлено кнопку чат-меню Web App: {app_url}")
+    except Exception as e:
+        logger.warning(f"Не вдалося встановити MenuButton: {e}")
+
     logger.info(f"Запуск Web App сервера на http://{settings.WEBAPP_HOST}:{settings.WEBAPP_PORT}...")
     
     try:

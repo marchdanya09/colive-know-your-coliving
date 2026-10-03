@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,19 +28,26 @@ async def serve_webapp(request: Request, user_id: int = Query(0), coliving_id: i
     )
 
 @app.get("/api/coliving-info")
-async def get_coliving_info(user_id: int = Query(...), coliving_id: int = Query(...)):
+async def get_coliving_info(user_id: int = Query(...), coliving_id: Optional[int] = Query(None)):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, user_id)
-        if not user or user.coliving_id != coliving_id:
+        if not user:
+            raise HTTPException(status_code=404, detail="Користувача не знайдено. Будь ласка, спочатку зареєструйтесь у боті через /start")
+
+        target_coliving_id = coliving_id or user.coliving_id
+        if not target_coliving_id:
+            raise HTTPException(status_code=400, detail="Користувач не приєднаний до жодного колівінгу")
+
+        if user.coliving_id != target_coliving_id:
             raise HTTPException(status_code=403, detail="Доступ заборонено")
 
-        coliving = await crud.get_coliving_by_id(session, coliving_id)
+        coliving = await crud.get_coliving_by_id(session, target_coliving_id)
         if not coliving:
             raise HTTPException(status_code=404, detail="Колівінг не знайдено")
 
-        rooms = await crud.get_rooms_with_users(session, coliving_id)
-        current_duty = await crud.get_current_duty(session, coliving_id)
-        pending_count = await crud.count_pending_requests(session, coliving_id)
+        rooms = await crud.get_rooms_with_users(session, target_coliving_id)
+        current_duty = await crud.get_current_duty(session, target_coliving_id)
+        pending_count = await crud.count_pending_requests(session, target_coliving_id)
 
         # Серіалізація кімнат
         rooms_data = []
@@ -97,11 +105,15 @@ async def get_coliving_info(user_id: int = Query(...), coliving_id: int = Query(
         }
 
 @app.post("/api/sotnik/toggle-lock")
-async def api_toggle_lock(user_id: int = Query(...), coliving_id: int = Query(...)):
+async def api_toggle_lock(user_id: int = Query(...), coliving_id: Optional[int] = Query(None)):
     async with AsyncSessionLocal() as session:
         user = await crud.get_user_by_tg_id(session, user_id)
-        if not user or user.role != "SOTNIK" or user.coliving_id != coliving_id:
+        if not user or user.role != "SOTNIK":
             raise HTTPException(status_code=403, detail="Лише Сотник має право перемикати блокування")
 
-        is_locked = await crud.toggle_coliving_lock(session, coliving_id)
+        target_coliving_id = coliving_id or user.coliving_id
+        if not target_coliving_id or user.coliving_id != target_coliving_id:
+            raise HTTPException(status_code=403, detail="Доступ заборонено")
+
+        is_locked = await crud.toggle_coliving_lock(session, target_coliving_id)
         return {"status": "ok", "is_locked": is_locked}

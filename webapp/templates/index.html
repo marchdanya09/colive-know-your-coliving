@@ -50,8 +50,24 @@
     </div>
   </header>
 
+  <!-- Loading State -->
+  <div id="loading-state" class="flex-1 flex flex-col items-center justify-center p-8 space-y-4">
+    <div class="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+    <p class="text-sm font-medium text-slate-400">Завантаження колівінгу...</p>
+  </div>
+
+  <!-- Error State -->
+  <div id="error-state" class="hidden flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
+    <span class="text-5xl">🏘️</span>
+    <h2 class="text-lg font-bold text-white">Зв'язок з колівінгом</h2>
+    <p id="error-message" class="text-sm text-slate-400 max-w-xs leading-relaxed">Помилка завантаження даних</p>
+    <button onclick="loadData()" class="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm shadow-lg shadow-indigo-600/30 transition">
+      Спробувати знову
+    </button>
+  </div>
+
   <!-- Main Tabs Content -->
-  <main class="flex-1 p-4 max-w-lg mx-auto w-full space-y-4">
+  <main id="main-content" class="hidden flex-1 p-4 max-w-lg mx-auto w-full space-y-4">
 
     <!-- Tab 1: Календар чергувань -->
     <div id="tab-calendar" class="tab-content space-y-4">
@@ -198,7 +214,7 @@
   </main>
 
   <!-- Bottom Navigation Bar -->
-  <nav class="fixed bottom-0 left-0 right-0 tg-card border-t border-slate-700/50 flex justify-around items-center py-2 px-1 z-20">
+  <nav id="bottom-nav" class="hidden fixed bottom-0 left-0 right-0 tg-card border-t border-slate-700/50 flex justify-around items-center py-2 px-1 z-20">
     <button onclick="switchTab('calendar')" id="nav-calendar" class="nav-btn flex flex-col items-center flex-1 py-1 text-indigo-400">
       <span class="text-lg">📅</span>
       <span class="text-[10px] font-semibold mt-0.5">Календар</span>
@@ -224,13 +240,22 @@
   <script>
     const tg = window.Telegram?.WebApp;
     if (tg) {
-      tg.expand();
-      tg.ready();
+      try {
+        tg.expand();
+        tg.ready();
+      } catch (e) {
+        console.warn("Telegram WebApp init:", e);
+      }
     }
 
     const urlParams = new URLSearchParams(window.location.search);
-    const userId = urlParams.get('user_id');
-    const colivingId = urlParams.get('coliving_id');
+    let userId = urlParams.get('user_id');
+    let colivingId = urlParams.get('coliving_id');
+
+    // Автоматично визначаємо Telegram ID через Telegram WebApp SDK, якщо не передано в параметрах URL
+    if (!userId && tg?.initDataUnsafe?.user?.id) {
+      userId = tg.initDataUnsafe.user.id;
+    }
 
     let colivingData = null;
 
@@ -238,29 +263,72 @@
       if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
 
       document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
-      document.getElementById('tab-' + tabId).classList.remove('hidden');
+      const activeTab = document.getElementById('tab-' + tabId);
+      if (activeTab) activeTab.classList.remove('hidden');
 
       document.querySelectorAll('.nav-btn').forEach(btn => {
         btn.classList.remove('text-indigo-400');
         btn.classList.add('text-slate-400');
       });
-      document.getElementById('nav-' + tabId).classList.add('text-indigo-400');
-      document.getElementById('nav-' + tabId).classList.remove('text-slate-400');
+      const activeNav = document.getElementById('nav-' + tabId);
+      if (activeNav) {
+        activeNav.classList.add('text-indigo-400');
+        activeNav.classList.remove('text-slate-400');
+      }
+    }
+
+    function showError(message) {
+      document.getElementById('loading-state')?.classList.add('hidden');
+      document.getElementById('main-content')?.classList.add('hidden');
+      document.getElementById('bottom-nav')?.classList.add('hidden');
+      const errEl = document.getElementById('error-state');
+      if (errEl) {
+        errEl.classList.remove('hidden');
+        document.getElementById('error-message').innerText = message;
+      }
     }
 
     async function loadData() {
+      const loadingEl = document.getElementById('loading-state');
+      const errorEl = document.getElementById('error-state');
+      const mainEl = document.getElementById('main-content');
+      const navEl = document.getElementById('bottom-nav');
+
+      if (loadingEl) loadingEl.classList.remove('hidden');
+      if (errorEl) errorEl.classList.add('hidden');
+      if (mainEl) mainEl.classList.add('hidden');
+
+      if (!userId || userId === "0") {
+        showError("Не вдалося визначити ваш Telegram ID. Відкрийте додаток через меню чату бота або виконайте команду /start.");
+        return;
+      }
+
       try {
-        const res = await fetch(`/api/coliving-info?user_id=${userId}&coliving_id=${colivingId}`);
-        if (!res.ok) throw new Error("Помилка завантаження даних");
+        let apiUrl = `/api/coliving-info?user_id=${userId}`;
+        if (colivingId && colivingId !== "0") {
+          apiUrl += `&coliving_id=${colivingId}`;
+        }
+
+        const res = await fetch(apiUrl);
+        if (!res.ok) {
+          const errJson = await res.json().catch(() => ({}));
+          throw new Error(errJson.detail || "Помилка зв'язку із сервером");
+        }
         colivingData = await res.json();
         renderUI(colivingData);
+
+        if (loadingEl) loadingEl.classList.add('hidden');
+        if (mainEl) mainEl.classList.remove('hidden');
+        if (navEl) navEl.classList.remove('hidden');
       } catch (e) {
-        console.error(e);
-        document.getElementById('coliving-title').innerText = "Помилка зв'язку з базою";
+        console.error("Load data error:", e);
+        showError(e.message || "Помилка зв'язку з базою даних колівінгу");
       }
     }
 
     function renderUI(data) {
+      if (!data || !data.coliving) return;
+
       document.getElementById('coliving-title').innerText = `${data.coliving.name} • ${data.coliving.address}`;
       document.getElementById('treasury-val').innerText = `${data.coliving.treasury_balance} ₴`;
       document.getElementById('my-fines-val').innerText = `${data.current_user.unpaid_fines} ₴`;
@@ -268,26 +336,36 @@
 
       if (data.current_user.role === 'SOTNIK') {
         document.getElementById('user-badge').innerText = 'Сотник 👑';
-        document.getElementById('user-badge').classList.replace('text-indigo-300', 'text-amber-300');
-        document.getElementById('user-badge').classList.replace('bg-indigo-500/20', 'bg-amber-500/20');
+        document.getElementById('user-badge').className = "px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30";
         document.getElementById('nav-sotnik').classList.remove('hidden');
         document.getElementById('sotnik-code-badge').innerText = `Код: ${data.coliving.invite_code}`;
         document.getElementById('sotnik-pending-label').innerText = `${data.pending_requests_count} очікують розгляду`;
+      } else {
+        document.getElementById('user-badge').innerText = 'Мешканець';
+        document.getElementById('user-badge').className = "px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-500/20 text-indigo-300 border border-indigo-500/30";
+        document.getElementById('nav-sotnik').classList.add('hidden');
       }
 
       // Render Current Duty
-      if (data.current_duty && data.current_duty.room) {
-        document.getElementById('current-duty-room').innerText = data.current_duty.room.name;
-        document.getElementById('current-duty-dates').innerText = `${data.current_duty.start_date} – ${data.current_duty.end_date}`;
+      const dutyRoomEl = document.getElementById('current-duty-room');
+      const dutyDatesEl = document.getElementById('current-duty-dates');
+      const membersDiv = document.getElementById('current-duty-members');
+      membersDiv.innerHTML = '';
 
-        const membersDiv = document.getElementById('current-duty-members');
-        membersDiv.innerHTML = '';
+      if (data.current_duty && data.current_duty.room) {
+        dutyRoomEl.innerText = data.current_duty.room.name;
+        dutyDatesEl.innerText = `${data.current_duty.start_date} – ${data.current_duty.end_date}`;
+
         data.current_duty.room.users.forEach(u => {
           const badge = document.createElement('span');
           badge.className = "px-2 py-1 rounded-md text-xs bg-slate-800 text-slate-200 border border-slate-700/60";
           badge.innerText = u.full_name;
           membersDiv.appendChild(badge);
         });
+      } else {
+        dutyRoomEl.innerText = "Не призначено";
+        dutyDatesEl.innerText = "—";
+        membersDiv.innerHTML = '<span class="text-xs text-slate-500 italic">Графік ще не розпочато</span>';
       }
 
       // Render Timeline
@@ -335,18 +413,21 @@
     }
 
     async function toggleLock() {
-      if (!userId || !colivingId) return;
+      if (!userId) return;
+      const cid = colivingId || (colivingData && colivingData.coliving ? colivingData.coliving.id : null);
       try {
-        const res = await fetch(`/api/sotnik/toggle-lock?user_id=${userId}&coliving_id=${colivingId}`, { method: 'POST' });
+        let url = `/api/sotnik/toggle-lock?user_id=${userId}`;
+        if (cid) url += `&coliving_id=${cid}`;
+        const res = await fetch(url, { method: 'POST' });
         const result = await res.json();
         alert(result.is_locked ? "🔒 Прийом заявок закрито!" : "🔓 Прийом заявок відкрито!");
         loadData();
       } catch (e) {
-        alert("Помилка");
+        alert("Помилка зв'язку");
       }
     }
 
-    window.onload = loadData;
+    window.addEventListener('DOMContentLoaded', loadData);
   </script>
 </body>
 </html>

@@ -70,7 +70,7 @@ async def menu_sotnik_panel(message: Message):
         async with AsyncSessionLocal() as session:
             user = await crud.get_user_by_tg_id(session, tg_id)
             if user and user.role == "SOTNIK":
-                webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={tg_id}&coliving_id={user.coliving_id}" if user.coliving_id else None
+                webapp_url = settings.get_webapp_url(user_id=tg_id, coliving_id=user.coliving_id) if user.coliving_id else None
                 await message.answer("👑 Панель Сотника відкрита.", reply_markup=get_main_keyboard(is_sotnik=True, webapp_url=webapp_url))
     await render_sotnik_panel(message, message.from_user.id)
 
@@ -131,7 +131,7 @@ async def cb_approve_request(call: CallbackQuery):
         try:
             is_sotnik = (approved_user.role == "SOTNIK")
             notif_text = texts.REQUEST_APPROVED_SOTNIK_NOTIF_USER if is_sotnik else texts.REQUEST_APPROVED_NOTIF_USER
-            webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={approved_user.telegram_id}&coliving_id={coliving.id}"
+            webapp_url = settings.get_webapp_url(user_id=approved_user.telegram_id, coliving_id=coliving.id)
             await call.bot.send_message(
                 chat_id=approved_user.telegram_id,
                 text=notif_text.format(
@@ -437,7 +437,7 @@ async def cb_toggle_role(call: CallbackQuery):
         if success and target_user:
             is_sotnik = (target_user.role == "SOTNIK")
             try:
-                webapp_url = f"{settings.WEBAPP_BASE_URL}?user_id={target_user.telegram_id}&coliving_id={target_user.coliving_id}"
+                webapp_url = settings.get_webapp_url(user_id=target_user.telegram_id, coliving_id=target_user.coliving_id)
                 notif = (
                     "👑 <b>Вам надано права Сотника колівінгу!</b> У вас з'явилася Панель Сотника."
                     if is_sotnik
