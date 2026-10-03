@@ -2,13 +2,28 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from sqlalchemy.orm import declarative_base
 from config import settings
 
-db_url = settings.DATABASE_URL
-if db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
-elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+asyncpg://"):
-    db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+import urllib.parse
 
-engine = create_async_engine(db_url, echo=False)
+db_url = settings.DATABASE_URL
+connect_args = {}
+
+if "postgresql" in db_url or "postgres://" in db_url:
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+asyncpg://"):
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    # Neon і Supabase додають ?sslmode=require, який asyncpg не приймає напряму в URL
+    if "sslmode=" in db_url:
+        parsed = urllib.parse.urlparse(db_url)
+        query_params = urllib.parse.parse_qs(parsed.query)
+        ssl_val = query_params.pop("sslmode", [None])[0]
+        if ssl_val and ssl_val.lower() in ["require", "verify-ca", "verify-full", "true"]:
+            connect_args["ssl"] = "require"
+        new_query = urllib.parse.urlencode({k: v[0] for k, v in query_params.items()})
+        db_url = urllib.parse.urlunparse(parsed._replace(query=new_query))
+
+engine = create_async_engine(db_url, connect_args=connect_args, echo=False)
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
