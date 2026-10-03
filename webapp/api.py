@@ -14,9 +14,17 @@ app = FastAPI(title="CO:LIVE Mini App API")
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=templates_dir)
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_webapp(request: Request, user_id: int = Query(0), coliving_id: int = Query(0)):
-    return templates.TemplateResponse("index.html", {"request": request, "user_id": user_id, "coliving_id": coliving_id})
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"user_id": user_id, "coliving_id": coliving_id}
+    )
 
 @app.get("/api/coliving-info")
 async def get_coliving_info(user_id: int = Query(...), coliving_id: int = Query(...)):
