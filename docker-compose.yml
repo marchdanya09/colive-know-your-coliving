@@ -1,0 +1,11 @@
+services:
+  bot:
+    build: .
+    container_name: colive_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./colive.db:/app/colive.db
