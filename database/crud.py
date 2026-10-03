@@ -577,6 +577,13 @@ async def get_unpaid_fines(session: AsyncSession, coliving_id: int) -> List[Fine
     return list(res.scalars().all())
 
 
+async def update_user_name(session: AsyncSession, user_id: int, new_name: str) -> Optional[User]:
+    stmt = update(User).where(User.id == user_id).values(full_name=new_name)
+    await session.execute(stmt)
+    await session.commit()
+    return await get_user_by_id(session, user_id)
+
+
 async def update_coliving_info(
     session: AsyncSession,
     coliving_id: int,

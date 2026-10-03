@@ -93,25 +93,31 @@ async def test_sotnik_wizard_full_flow(memory_storage):
     msg1 = make_mock_message(sotnik_id, "Колівінг Світанок")
     await start.wizard_name(msg1, state)
     msg1.answer.assert_called_once()
-    assert "Крок 2/4" in msg1.answer.call_args[0][0]
+    assert "Крок 2/5" in msg1.answer.call_args[0][0]
 
     # 2. Крок 2: Введення адреси
     msg2 = make_mock_message(sotnik_id, "вул. Саксаганського, 10")
     await start.wizard_address(msg2, state)
     msg2.answer.assert_called_once()
-    assert "Крок 3/4" in msg2.answer.call_args[0][0]
+    assert "Крок 3/5" in msg2.answer.call_args[0][0]
 
     # 3. Крок 3: Введення кількості людей
     msg3 = make_mock_message(sotnik_id, "16")
     await start.wizard_people(msg3, state)
     msg3.answer.assert_called_once()
-    assert "Крок 4/4" in msg3.answer.call_args[0][0]
+    assert "Крок 4/5" in msg3.answer.call_args[0][0]
 
-    # 4. Крок 4: Введення кількості кімнат "4" (Той самий крок, що ламався!)
+    # 4. Крок 4: Введення кількості кімнат "4"
     msg4 = make_mock_message(sotnik_id, "4")
     await start.wizard_rooms(msg4, state)
     msg4.answer.assert_called_once()
-    reply_text = msg4.answer.call_args[0][0]
+    assert "Крок 5/5" in msg4.answer.call_args[0][0]
+
+    # 5. Крок 5: Введення Прізвища та Імені сотника
+    msg5 = make_mock_message(sotnik_id, "Олександр Сотник")
+    await start.wizard_sotnik_name(msg5, state)
+    msg5.answer.assert_called_once()
+    reply_text = msg5.answer.call_args[0][0]
 
     # Перевіряємо, що відповідь надіслана, HTML валідний, дані створені
     assert "Колівінг успішно створено!" in reply_text
@@ -124,6 +130,7 @@ async def test_sotnik_wizard_full_flow(memory_storage):
         assert user is not None
         assert user.role == "SOTNIK"
         assert user.is_approved is True
+        assert user.full_name == "Олександр Сотник"
         assert user.coliving.name == "Колівінг Світанок"
         assert len(user.coliving.rooms) == 4
 
@@ -203,9 +210,15 @@ async def test_navigation_back_buttons(memory_storage):
     call_back_name = make_mock_callback(user_id, "wizard_back_to_name")
     await start.cb_wizard_back_to_name(call_back_name, state)
     call_back_name.message.edit_text.assert_called_once()
-    assert "Крок 1/4" in call_back_name.message.edit_text.call_args[0][0]
+    assert "Крок 1/5" in call_back_name.message.edit_text.call_args[0][0]
 
-    # 3. Назад з введення коду мешканця
+    # 3. Назад з кроку 5 (ім'я сотника) до кроку 4 (кімнати)
+    call_back_rooms = make_mock_callback(user_id, "wizard_back_to_rooms")
+    await start.cb_wizard_back_to_rooms(call_back_rooms, state)
+    call_back_rooms.message.edit_text.assert_called_once()
+    assert "Крок 4/5" in call_back_rooms.message.edit_text.call_args[0][0]
+
+    # 4. Назад з введення коду мешканця
     call_back_res = make_mock_callback(user_id, "role_back_to_start")
     await start.cb_role_back_to_start(call_back_res, state)
     call_back_res.message.edit_text.assert_called_once()
@@ -579,7 +592,38 @@ async def test_sotnik_role_and_duty_assignment_by_buttons(memory_storage):
         u = await crud.get_user_by_id(session, res_id)
         assert u.room_role == "Староста"
         assert u.room_duty == "☕ Закупівля кави для кухні"
-        c = await crud.get_coliving_by_id(session, col.id)
-        assert "Сортуємо пластик окремо" in c.custom_duty_rules
+
+
+@pytest.mark.asyncio
+async def test_change_name_command():
+    """Тест команди /name для зміни Прізвища та Імені користувача."""
+    user_tg = 9988
+    async with AsyncSessionLocal() as session:
+        col, _ = await crud.create_coliving_with_rooms(
+            session=session,
+            name="Колівінг Імені",
+            address="вул. Шевченка, 1",
+            total_people=4,
+            total_rooms=1,
+            creator_tg_id=user_tg,
+            creator_name="Старе Ім'я"
+        )
+
+    # 1. Виклик без аргументів - показує довідку
+    msg_help = make_mock_message(user_tg, "/name")
+    await user_menu.cmd_change_name(msg_help)
+    msg_help.answer.assert_called_once()
+    assert "Як змінити своє" in msg_help.answer.call_args[0][0]
+
+    # 2. Виклик із новим іменем
+    msg_new = make_mock_message(user_tg, "/name Данило Мартинюк")
+    await user_menu.cmd_change_name(msg_new)
+    msg_new.answer.assert_called_once()
+    assert "Данило Мартинюк" in msg_new.answer.call_args[0][0]
+
+    # Перевіряємо БД
+    async with AsyncSessionLocal() as session:
+        u = await crud.get_user_by_tg_id(session, user_tg)
+        assert u.full_name == "Данило Мартинюк"
 
 

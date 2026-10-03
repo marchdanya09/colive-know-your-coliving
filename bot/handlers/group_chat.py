@@ -23,6 +23,40 @@ async def get_coliving_by_chat_id(session, chat_id: int) -> Optional[Coliving]:
     return res.scalar_one_or_none()
 
 # -------------------------------------------------------------
+# 0. Довідка по командах чату (/help)
+# -------------------------------------------------------------
+
+@router.message(Command("help", "допомога"))
+async def cmd_group_help(message: Message):
+    if message.chat.type not in ["group", "supergroup"]:
+        return
+
+    help_text = (
+        "📖 <b>Основні команди та можливості бота в чаті:</b>\n\n"
+        "📢 <b>Виклики та згадки:</b>\n"
+        "• <code>@all</code> (або <code>/all</code>) — покликати всіх мешканців колівінгу\n"
+        "• <code>@sotnik</code> (або <code>/sotnik</code>) — покликати сотників/адміністраторів\n"
+        "• <code>@room1</code> (або <code>/room1</code>, <code>/кімната 1</code>) — покликати сусідів кімнати\n"
+        "• <code>@duty</code> (або <code>/duty</code>, <code>/чергові</code>) — хто зараз чергує\n\n"
+        "🚨 <b>Скарги та порядок:</b>\n"
+        "• <code>/скарга [текст]</code> — надіслати скаргу черговій кімнаті в ЛС та в топік\n"
+        "• <code>/скарга @user [текст]</code> — надіслати скаргу конкретному мешканцю в ЛС\n"
+        "• <code>/скарга</code> (у відповідь на повідомлення/фото) — поскаржитися на порушення\n"
+        "• <code>/чиї_речі [текст/фото]</code> (або реплаєм) — надіслати в топік «Чиї речі?»\n\n"
+        "🗓 <b>Інформація та графіки:</b>\n"
+        "• <code>/calendar</code> (або <code>/графік</code>) — розклад чергувань по тижнях із датами\n"
+        "• <code>/rooms</code> (або <code>/кімнати</code>) — список кімнат та їх жителів\n"
+        "• <code>/rules</code> (або <code>/правила</code>) — правила та чекліст прибирання\n"
+        "• <code>/fines</code> (або <code>/штрафи</code>) — скарбничка колівінгу та неоплачені штрафи\n\n"
+        "👑 <b>Для Сотника:</b>\n"
+        "• <code>/штраф [сума] [причина]</code> (реплаєм на порушника) — виписати штраф\n"
+        "• <code>/link_group [код]</code> — прив'язати чат до колівінгу\n"
+        "• <code>/link_topic [duty/complaints/lost_found]</code> — закріпити топік\n\n"
+        "🤖 <i>Також усі функції доступні в особистих повідомленнях з ботом через зручні кнопки меню!</i>"
+    )
+    await message.reply(help_text)
+
+# -------------------------------------------------------------
 # 1. Прив'язка групи та топіків
 # -------------------------------------------------------------
 
@@ -193,7 +227,9 @@ async def cmd_group_calendar(message: Message):
         current_duty = await crud.get_current_duty(session, coliving.id)
         rooms = await crud.get_rooms_with_users(session, coliving.id)
 
-        cur_room_str = current_duty.room.name if (current_duty and current_duty.room) else "Не призначено"
+        cur_room = current_duty.room if current_duty else None
+        cur_room_str = cur_room.name if cur_room else "Не призначено"
+        cur_members = ", ".join([f'<a href="tg://user?id={u.telegram_id}">{u.full_name}</a>' for u in cur_room.users]) if (cur_room and cur_room.users) else "немає призначених"
         cur_dates = f"{current_duty.start_date.strftime('%d.%m')} - {current_duty.end_date.strftime('%d.%m')}" if current_duty else "поточний період"
 
         upcoming = []
@@ -216,7 +252,7 @@ async def cmd_group_calendar(message: Message):
 
         text = (
             f"🗓 <b>Графік чергувань у «{coliving.name}»</b>\n\n"
-            f"🔥 <b>Зараз чергує:</b> {cur_room_str}\n"
+            f"🔥 <b>Зараз чергує:</b> {cur_room_str} ({cur_members})\n"
             f"⏱ <b>Період:</b> {cur_dates}\n\n"
             f"🔜 <b>Наступні чергування:</b>\n{upcoming_str}"
         )
@@ -614,8 +650,8 @@ async def show_group_duty(message: Message):
             await message.reply("⚠️ На цей тиждень чергова кімната не встановлена.")
             return
 
-        tags = " ".join([
-            f"@{u.username}" if u.username else f'<a href="tg://user?id={u.telegram_id}">{u.full_name}</a>'
+        tags = ", ".join([
+            f'<a href="tg://user?id={u.telegram_id}">{u.full_name}</a>'
             for u in duty.room.users
         ]) if duty.room.users else "немає мешканців"
 

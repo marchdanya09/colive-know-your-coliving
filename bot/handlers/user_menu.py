@@ -56,6 +56,31 @@ async def cmd_menu(message: Message):
             return
         await message.answer("📱 Головне меню оновлено!", reply_markup=get_user_main_kb(user, tg_id))
 
+
+# Команда /name для зміни імені та прізвища мешканця/сотника
+@router.message(Command("name", "myname", "імʼя", "імя"))
+async def cmd_change_name(message: Message):
+    parts = (message.text or "").strip().split(maxsplit=1)
+    if len(parts) > 1:
+        new_name = parts[1].strip()
+        if len(new_name) < 2 or len(new_name) > 100:
+            await message.answer("⚠️ Ім'я та Прізвище повинні бути від 2 до 100 символів.")
+            return
+        async with AsyncSessionLocal() as session:
+            user = await crud.get_user_by_tg_id(session, message.from_user.id)
+            if not user or not user.is_approved:
+                await message.answer("⚠️ Вас не знайдено серед активних мешканців колівінгу.")
+                return
+            await crud.update_user_name(session, user.id, new_name)
+        await message.answer(f"✅ Ваше ім'я успішно оновлено на: <b>{new_name}</b>!")
+    else:
+        await message.answer(
+            "ℹ️ <b>Як змінити своє Ім'я та Прізвище:</b>\n"
+            "Введіть команду разом із вашим новим іменем:\n"
+            "Наприклад: <code>/name Данило Мартинюк</code>"
+        )
+
+
 # 0. 🏠 Мій колівінг (Каталог усього простору з усіма мешканцями та контактами)
 async def render_my_coliving(message_or_call, tg_id: int):
     async with AsyncSessionLocal() as session:
@@ -76,7 +101,7 @@ async def render_my_coliving(message_or_call, tg_id: int):
 
         duty_room_name = current_duty.room.name if (current_duty and current_duty.room) else "Не призначено"
         if current_duty and current_duty.room and current_duty.room.users:
-            duty_members_str = ", ".join([u.full_name for u in current_duty.room.users])
+            duty_members_str = ", ".join([f'<a href="tg://user?id={u.telegram_id}">{u.full_name}</a>' for u in current_duty.room.users])
         else:
             duty_members_str = "не призначено"
 
@@ -155,7 +180,7 @@ async def menu_calendar(message: Message):
 
         if current_duty and current_duty.room:
             duty_room = current_duty.room
-            members = ", ".join([u.full_name for u in duty_room.users]) if duty_room.users else "немає призначених"
+            members = ", ".join([f'<a href="tg://user?id={u.telegram_id}">{u.full_name}</a>' for u in duty_room.users]) if duty_room.users else "немає призначених"
             dates_str = f"{current_duty.start_date.strftime('%d.%m')} - {current_duty.end_date.strftime('%d.%m')}"
         else:
             duty_room = rooms[0] if rooms else None

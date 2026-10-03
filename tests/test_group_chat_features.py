@@ -280,3 +280,66 @@ async def test_whose_things_and_chat_fine():
         fines = await crud.get_unpaid_fines(session, col.id)
         assert len(fines) == 1
         assert fines[0].amount == 100.0
+
+
+@pytest.mark.asyncio
+async def test_group_help_command():
+    """Тест команди /help у груповому чаті."""
+    chat_id = -100555666
+    msg = make_mock_group_message(101, chat_id, "/help")
+    await group_chat.cmd_group_help(msg)
+    msg.reply.assert_called_once()
+    reply_text = msg.reply.call_args[0][0]
+    assert "@all" in reply_text
+    assert "@sotnik" in reply_text
+    assert "/скарга" in reply_text
+    assert "/чиї_речі" in reply_text
+    assert "/calendar" in reply_text
+    assert "/штраф" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_group_calendar_and_duty_hyperlinks():
+    """Тест гіперпосилань імен чергових мешканців у графіку та /duty."""
+    sotnik_tg = 9401
+    resident_tg = 9402
+    group_chat_id = -100998877
+
+    async with AsyncSessionLocal() as session:
+        col, _ = await crud.create_coliving_with_rooms(
+            session=session,
+            name="Колівінг Лінк",
+            address="вул. Посилання, 5",
+            total_people=4,
+            total_rooms=2,
+            creator_tg_id=sotnik_tg,
+            creator_name="Олександр Сотник"
+        )
+        rooms = await crud.get_rooms_with_users(session, col.id)
+        user = await crud.create_user(
+            session=session,
+            tg_id=resident_tg,
+            full_name="Марія Коваль",
+            username="maria_k",
+            coliving_id=col.id,
+            room_id=rooms[0].id,
+            is_approved=True
+        )
+        await crud.link_group_to_coliving(session, col.id, group_chat_id)
+
+    # 1. Перевірка команди /calendar
+    msg_cal = make_mock_group_message(sotnik_tg, group_chat_id, "/calendar")
+    await group_chat.cmd_group_calendar(msg_cal)
+    msg_cal.reply.assert_called_once()
+    cal_text = msg_cal.reply.call_args[0][0]
+    assert f'<a href="tg://user?id={resident_tg}">Марія Коваль</a>' in cal_text
+    assert f'<a href="tg://user?id={sotnik_tg}">Олександр Сотник</a>' in cal_text
+
+    # 2. Перевірка функції show_group_duty (/duty)
+    msg_duty = make_mock_group_message(resident_tg, group_chat_id, "/duty")
+    await group_chat.show_group_duty(msg_duty)
+    msg_duty.reply.assert_called_once()
+    duty_text = msg_duty.reply.call_args[0][0]
+    assert f'<a href="tg://user?id={resident_tg}">Марія Коваль</a>' in duty_text
+    assert f'<a href="tg://user?id={sotnik_tg}">Олександр Сотник</a>' in duty_text
+

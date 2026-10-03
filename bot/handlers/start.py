@@ -26,6 +26,7 @@ class ColivingWizard(StatesGroup):
     waiting_for_address = State()
     waiting_for_people = State()
     waiting_for_rooms = State()
+    waiting_for_sotnik_name = State()
 
 class ResidentJoinState(StatesGroup):
     waiting_for_code = State()
@@ -165,6 +166,23 @@ async def wizard_rooms(message: Message, state: FSMContext):
         await message.answer(texts.WIZARD_INVALID_NUMBER, reply_markup=get_back_kb("wizard_back_to_people"))
         return
     total_rooms = int(text)
+    await state.update_data(total_rooms=total_rooms)
+    await state.set_state(ColivingWizard.waiting_for_sotnik_name)
+    await message.answer(texts.WIZARD_SOTNIK_NAME_PROMPT, reply_markup=get_back_kb("wizard_back_to_rooms"))
+
+@router.callback_query(F.data == "wizard_back_to_rooms")
+async def cb_wizard_back_to_rooms(call: CallbackQuery, state: FSMContext):
+    await state.set_state(ColivingWizard.waiting_for_rooms)
+    await call.message.edit_text(texts.WIZARD_ROOMS_PROMPT, reply_markup=get_back_kb("wizard_back_to_people"))
+    await call.answer()
+
+@router.message(ColivingWizard.waiting_for_sotnik_name)
+async def wizard_sotnik_name(message: Message, state: FSMContext):
+    full_name = message.text.strip()
+    if not full_name or len(full_name) > 100:
+        await message.answer("⚠️ Будь ласка, введіть коректне Прізвище та Ім'я (до 100 символів):", reply_markup=get_back_kb("wizard_back_to_rooms"))
+        return
+
     data = await state.get_data()
     await state.clear()
 
@@ -173,7 +191,7 @@ async def wizard_rooms(message: Message, state: FSMContext):
     name = data["coliving_name"]
     address = data["coliving_address"]
     total_people = data["total_people"]
-    full_name = message.from_user.full_name or "Сотник"
+    total_rooms = data["total_rooms"]
     username = message.from_user.username
 
     bot_username = "colive_bot"
