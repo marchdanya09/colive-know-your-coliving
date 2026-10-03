@@ -4,7 +4,7 @@ import logging
 from typing import List, Optional, Dict, Any, Union
 from datetime import timedelta, date
 from aiogram import Router, F
-from aiogram.types import Message, ChatMemberUpdated
+from aiogram.types import Message, ChatMemberUpdated, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command, ChatMemberUpdatedFilter, JOIN_TRANSITION, BaseFilter
 from aiogram.exceptions import TelegramBadRequest, TelegramAPIError
 from database.db import AsyncSessionLocal
@@ -538,11 +538,31 @@ async def cmd_link_group(message: Message):
             return
 
         await crud.link_group_to_coliving(session, coliving.id, chat_id, topic_id)
-        topic_info = f" (топік чергувань ID: {topic_id})" if topic_id else ""
-        await message.answer(
-            f"✅ <b>Груповий чат успішно прив'язано до колівінгу «{coliving.name}»!</b>{topic_info}\n\n"
-            "Тепер бот може надсилати сюди анонси, термінові скарги та реагувати на команди."
+        
+        bot_info = await message.bot.get_me()
+        user = await crud.get_user_by_tg_id(session, message.from_user.id)
+        sotnik_name = user.full_name if user else message.from_user.full_name
+        sotnik_mention = f'<a href="tg://user?id={message.from_user.id}">{sotnik_name}</a>'
+        invite_url = f"https://t.me/{bot_info.username}?start={coliving.invite_code}"
+
+        invite_kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🚪 Приєднатися до колівінгу", url=invite_url)]
+            ]
         )
+
+        topic_info = f" (топік чергувань ID: {topic_id})" if topic_id else ""
+        welcome_post = (
+            f"✅ <b>Груповий чат успішно прив'язано до колівінгу «{coliving.name}»!</b>{topic_info}\n\n"
+            f"👑 <b>Сотник {sotnik_mention} запрошує всіх учасників групи приєднатися до колівінгу!</b>\n\n"
+            f"👉 <b>Для швидкої реєстрації та вибору своєї кімнати:</b>\n"
+            f"Натисніть кнопку нижче або перейдіть за посиланням:\n"
+            f"🔗 {invite_url}\n\n"
+            f"<i>(Або відкрийте @{bot_info.username} та введіть код: <code>{coliving.invite_code}</code>)</i>\n\n"
+            f"ℹ️ Наступний крок: для створення системних тем («Скарги», «Чиє?», «Оголошення») введіть команду <code>/create-topics</code>."
+        )
+
+        await message.answer(welcome_post, reply_markup=invite_kb)
 
 
 @router.message(Command("link_duty", "link_complaints", "link_lost_found", "link_topic"))

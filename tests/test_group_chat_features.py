@@ -51,6 +51,7 @@ def make_mock_group_message(user_id: int, chat_id: int, text: str = "", username
     msg.bot.send_message = AsyncMock()
     msg.bot.send_photo = AsyncMock()
     msg.bot.send_video = AsyncMock()
+    msg.bot.get_me = AsyncMock(return_value=TgUser(id=1, is_bot=True, first_name="Bot", username="colive_clean_bot"))
     return msg
 
 
