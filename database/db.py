@@ -24,6 +24,7 @@ async def init_db():
             ("colivings", "custom_duty_rules", "TEXT"),
             ("colivings", "complaints_topic_id", "INTEGER"),
             ("colivings", "lost_found_topic_id", "INTEGER"),
+            ("colivings", "announcements_topic_id", "INTEGER"),
         ]:
             try:
                 await conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col} {coltype}"))

@@ -1,9 +1,12 @@
 import re
-from typing import List, Optional
+import asyncio
+import logging
+from typing import List, Optional, Dict, Any, Union
 from datetime import timedelta, date
 from aiogram import Router, F
 from aiogram.types import Message, ChatMemberUpdated
-from aiogram.filters import Command, ChatMemberUpdatedFilter, JOIN_TRANSITION
+from aiogram.filters import Command, ChatMemberUpdatedFilter, JOIN_TRANSITION, BaseFilter
+from aiogram.exceptions import TelegramBadRequest, TelegramAPIError
 from database.db import AsyncSessionLocal
 from database import crud
 from sqlalchemy import select, and_
@@ -11,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from database.models import Coliving, Room, User, Complaint
 import texts
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 async def get_coliving_by_chat_id(session, chat_id: int) -> Optional[Coliving]:
@@ -22,8 +26,439 @@ async def get_coliving_by_chat_id(session, chat_id: int) -> Optional[Coliving]:
     res = await session.execute(stmt)
     return res.scalar_one_or_none()
 
+
 # -------------------------------------------------------------
-# 0. Довідка по командах чату (/help)
+# Допоміжні функції для роботи з повідомленнями та топіками
+# -------------------------------------------------------------
+
+async def delete_message_delayed(bot, chat_id: int, message_id: int, delay: int = 60):
+    """Видаляє повідомлення через вказану кількість секунд."""
+    try:
+        await asyncio.sleep(delay)
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
+
+
+async def send_to_general_chat(
+    bot,
+    chat_id: int,
+    text: str,
+    photo: Optional[str] = None,
+    video: Optional[str] = None
+):
+    """Надсилає повідомлення в основний чат (або тему General/Загальне)."""
+    try:
+        if photo:
+            return await bot.send_photo(chat_id=chat_id, photo=photo, caption=text)
+        elif video:
+            return await bot.send_video(chat_id=chat_id, video=video, caption=text)
+        else:
+            return await bot.send_message(chat_id=chat_id, text=text)
+    except Exception:
+        try:
+            if photo:
+                return await bot.send_photo(chat_id=chat_id, photo=photo, caption=text, message_thread_id=1)
+            elif video:
+                return await bot.send_video(chat_id=chat_id, video=video, caption=text, message_thread_id=1)
+            else:
+                return await bot.send_message(chat_id=chat_id, text=text, message_thread_id=1)
+        except Exception:
+            pass
+
+
+def parse_announcement_command(raw_text: str):
+    """Перевіряє, чи починається текст із команди оголошення, та повертає (is_cmd, announcement_text)."""
+    if not raw_text:
+        return False, ""
+    parts = raw_text.split(maxsplit=1)
+    first_word = parts[0].lower().split("@")[0]
+    if first_word in ["/оголошення", "/announcement", "/announce", "/объявление", "/advert"]:
+        content = parts[1].strip() if len(parts) > 1 else ""
+        return True, content
+    return False, ""
+
+
+def is_create_topics_command(message: Message) -> bool:
+    text = (message.text or "").strip().lower()
+    first_word = text.split()[0] if text else ""
+    first_word = first_word.split("@")[0]
+    return first_word in ["/create_topics", "/create-topics", "/створити_топіки", "/створити-топіки", "/topics"]
+
+
+def is_announcement_command(message: Message) -> bool:
+    text = (message.text or message.caption or "").strip().lower()
+    first_word = text.split()[0] if text else ""
+    first_word = first_word.split("@")[0]
+    return first_word in ["/оголошення", "/announcement", "/announce", "/объявление", "/advert"]
+
+
+# -------------------------------------------------------------
+# Фільтр та обробник топіку «Оголошення»
+# -------------------------------------------------------------
+
+class IsAnnouncementsTopicFilter(BaseFilter):
+    async def __call__(self, message: Message) -> Union[bool, Dict[str, Any]]:
+        if not message.message_thread_id or message.chat.type not in ["group", "supergroup"]:
+            return False
+        if message.from_user and message.from_user.is_bot:
+            return False
+        async with AsyncSessionLocal() as session:
+            coliving = await get_coliving_by_chat_id(session, message.chat.id)
+            if coliving and coliving.announcements_topic_id and message.message_thread_id == coliving.announcements_topic_id:
+                return {"coliving": coliving}
+        return False
+
+
+@router.message(IsAnnouncementsTopicFilter())
+async def handle_announcements_topic_message(message: Message, coliving: Coliving):
+    """
+    Суворий модератор топіку «Оголошення»:
+    - Усі повідомлення, що не починаються з /оголошення — видаляються, бот надсилає попередження на 60 сек.
+    - Порожні /оголошення — видаляються, бот надсилає попередження на 60 сек.
+    - Валідні оголошення — публікуються від імені бота із зазначенням автора, і дублюються в основний чат!
+    """
+    raw_text = (message.text or message.caption or "").strip()
+    is_cmd, announcement_text = parse_announcement_command(raw_text)
+
+    # 1. Повідомлення не починається з /оголошення
+    if not is_cmd:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        warn_msg = await message.answer(
+            "Для створення оголошення напишіть команду /оголошення. "
+            "Обговорення оголошень відбувається в основному чаті"
+        )
+        asyncio.create_task(delete_message_delayed(message.bot, message.chat.id, warn_msg.message_id, 60))
+        return
+
+    # 2. Повідомлення починається з /оголошення — перевіряємо наповнення
+    photo_id = message.photo[-1].file_id if message.photo else None
+    video_id = message.video.file_id if message.video else None
+
+    if message.reply_to_message:
+        if not announcement_text:
+            announcement_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+        if not photo_id and message.reply_to_message.photo:
+            photo_id = message.reply_to_message.photo[-1].file_id
+        if not video_id and message.reply_to_message.video:
+            video_id = message.reply_to_message.video.file_id
+
+    if not announcement_text.strip() and not photo_id and not video_id:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        warn_msg = await message.answer(
+            "⚠️ Оголошення порожнє. Для створення оголошення напишіть: "
+            "<code>/оголошення [Ваш текст]</code> (також можна прикріпити фото або відео)."
+        )
+        asyncio.create_task(delete_message_delayed(message.bot, message.chat.id, warn_msg.message_id, 60))
+        return
+
+    # 3. Валідне оголошення
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    sender = message.from_user
+    sender_mention = f'<a href="tg://user?id={sender.id}">{sender.full_name}</a>' if sender else "Мешканець"
+    body = announcement_text or "<i>(Дивіться прикріплені медіа)</i>"
+
+    topic_post = (
+        f"📢 <b>ОГОЛОШЕННЯ</b>\n\n"
+        f"{body}\n\n"
+        f"✍️ <b>Автор:</b> {sender_mention}\n"
+        f"💬 <i>Обговорення оголошення відбувається в основному чаті!</i>"
+    )
+
+    try:
+        if photo_id:
+            await message.bot.send_photo(
+                chat_id=message.chat.id,
+                message_thread_id=coliving.announcements_topic_id,
+                photo=photo_id,
+                caption=topic_post
+            )
+        elif video_id:
+            await message.bot.send_video(
+                chat_id=message.chat.id,
+                message_thread_id=coliving.announcements_topic_id,
+                video=video_id,
+                caption=topic_post
+            )
+        else:
+            await message.bot.send_message(
+                chat_id=message.chat.id,
+                message_thread_id=coliving.announcements_topic_id,
+                text=topic_post
+            )
+    except Exception as e:
+        logger.warning(f"Error publishing to announcements topic: {e}")
+
+    # Дублюємо в основний чат
+    general_post = (
+        f"📢 <b>НОВЕ ОГОЛОШЕННЯ</b>\n\n"
+        f"{body}\n\n"
+        f"✍️ <b>Автор:</b> {sender_mention}\n"
+        f"💬 <i>Тут ви можете обговорити та прокоментувати оголошення 👇</i>"
+    )
+    await send_to_general_chat(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        text=general_post,
+        photo=photo_id,
+        video=video_id
+    )
+
+
+# -------------------------------------------------------------
+# 0. Створення топіків (/create-topics)
+# -------------------------------------------------------------
+
+@router.message(F.text.func(is_create_topics_command))
+async def cmd_create_topics(message: Message):
+    if message.chat.type not in ["group", "supergroup"]:
+        await message.reply("⚠️ Цю команду потрібно виконувати в груповому чаті колівінгу.")
+        return
+
+    chat_id = message.chat.id
+    sender_tg = message.from_user.id
+
+    async with AsyncSessionLocal() as session:
+        coliving = await get_coliving_by_chat_id(session, chat_id)
+        if not coliving:
+            await message.reply(
+                "⚠️ Ця група ще не прив'язана до колівінгу.\n"
+                "Спочатку викличте команду: <code>/link_group [КОД_КОЛІВІНГУ]</code>"
+            )
+            return
+
+        # Перевірка прав: Сотник або Адміністратор чату
+        user = await crud.get_user_by_tg_id(session, sender_tg)
+        is_sotnik = (user and user.role == "SOTNIK" and user.coliving_id == coliving.id)
+
+    is_chat_admin = False
+    try:
+        cm = await message.bot.get_chat_member(chat_id=chat_id, user_id=sender_tg)
+        if cm.status in ["creator", "administrator"]:
+            is_chat_admin = True
+    except Exception:
+        pass
+
+    if not is_sotnik and not is_chat_admin:
+        await message.reply("⛔ Тільки Сотник колівінгу або адміністратор чату може створювати топіки.")
+        return
+
+    status_msg = await message.reply("⏳ Створюю системні топіки колівінгу («Скарги», «Чиє?», «Оголошення»)...")
+
+    try:
+        # 1. Топік "Скарги" (червоний колір 16478047 / 0xFB6F5F)
+        complaints_topic = await message.bot.create_forum_topic(
+            chat_id=chat_id,
+            name="🚨 Скарги",
+            icon_color=16478047
+        )
+        # 2. Топік "Чиє?" (жовтий колір 16766590 / 0xFFD67E)
+        lost_found_topic = await message.bot.create_forum_topic(
+            chat_id=chat_id,
+            name="📦 Чиє?",
+            icon_color=16766590
+        )
+        # 3. Топік "Оголошення" (синій колір 7322096 / 0x6FB9F0)
+        announcements_topic = await message.bot.create_forum_topic(
+            chat_id=chat_id,
+            name="📢 Оголошення",
+            icon_color=7322096
+        )
+    except TelegramBadRequest as e:
+        err_text = str(e).lower()
+        if "forum" in err_text or "disabled" in err_text or "not a forum" in err_text:
+            await status_msg.edit_text(
+                "⚠️ <b>У цьому чаті не увімкнено режим тем (Topics / Форум)!</b>\n\n"
+                "Telegram дозволяє вмикати теми лише власнику або адміну групи вручну:\n"
+                "1. Натисніть на назву групи ➔ <b>Редагувати (іконка олівця)</b>.\n"
+                "2. Увімкніть перемикач <b>«Теми» (Topics)</b>.\n"
+                "3. Переконайтеся, що бот має права адміністратора з дозволом <b>«Керування темами» (Manage topics)</b>.\n"
+                "4. Після цього повторіть команду <code>/create-topics</code>."
+            )
+            return
+        elif "right" in err_text or "permission" in err_text or "manage" in err_text:
+            await status_msg.edit_text(
+                "⚠️ <b>Боту не вистачає прав для створення тем!</b>\n\n"
+                "Будь ласка, надайте боту права адміністратора групи з дозволом <b>«Керування темами» (Manage topics)</b> "
+                "та повторіть команду <code>/create-topics</code>."
+            )
+            return
+        else:
+            await status_msg.edit_text(f"⚠️ Помилка створення тем: {e}")
+            return
+    except Exception as e:
+        await status_msg.edit_text(f"⚠️ Не вдалося створити теми: {e}")
+        return
+
+    # Зберігаємо ID топіків у базі
+    async with AsyncSessionLocal() as session:
+        await crud.update_coliving_topics(
+            session=session,
+            coliving_id=coliving.id,
+            complaints_topic_id=complaints_topic.message_thread_id,
+            lost_found_topic_id=lost_found_topic.message_thread_id,
+            announcements_topic_id=announcements_topic.message_thread_id
+        )
+
+    # Публікуємо закріплені інформаційні повідомлення у кожному топіку
+    try:
+        await message.bot.send_message(
+            chat_id=chat_id,
+            message_thread_id=complaints_topic.message_thread_id,
+            text=(
+                f"🚨 <b>Топік для скарг колівінгу «{coliving.name}»</b>\n\n"
+                "Сюди автоматично надсилаються всі скарги на порушення порядку та чистоти.\n"
+                "Ви також можете зареєструвати скаргу з будь-якої точки чату командою: <code>/скарга [текст]</code> "
+                "(або реплаєм на фото порушення)."
+            )
+        )
+    except Exception:
+        pass
+
+    try:
+        await message.bot.send_message(
+            chat_id=chat_id,
+            message_thread_id=lost_found_topic.message_thread_id,
+            text=(
+                f"📦 <b>Топік «Чиє?» колівінгу «{coliving.name}»</b>\n\n"
+                "Знайшли забуту річ, одяг або брудний посуд?\n"
+                "Напишіть команду <code>/чиї_речі [опис/фото]</code> або просто завантажте фото сюди."
+            )
+        )
+    except Exception:
+        pass
+
+    try:
+        await message.bot.send_message(
+            chat_id=chat_id,
+            message_thread_id=announcements_topic.message_thread_id,
+            text=(
+                f"📢 <b>Офіційні оголошення колівінгу «{coliving.name}»</b>\n\n"
+                "📌 <b>Правила цього топіку:</b>\n"
+                "• Публікація дозволена <b>виключно через команду</b>: <code>/оголошення [Текст оголошення]</code> (можна з фото або відео).\n"
+                "• Бот публікує оголошення від свого імені, зазначаючи автора, та дублює його в основний чат.\n"
+                "• <b>Усі звичайні повідомлення без команди /оголошення видаляються автоматично!</b>\n"
+                "• Обговорення та запитання до оголошень відбуваються в основному чаті."
+            )
+        )
+    except Exception:
+        pass
+
+    await status_msg.edit_text(
+        f"✅ <b>Топіки успішно створено та налаштовано для «{coliving.name}»!</b>\n\n"
+        f"1. 🚨 <b>Скарги</b> (ID: <code>{complaints_topic.message_thread_id}</code>)\n"
+        f"2. 📦 <b>Чиє?</b> (ID: <code>{lost_found_topic.message_thread_id}</code>)\n"
+        f"3. 📢 <b>Оголошення</b> (ID: <code>{announcements_topic.message_thread_id}</code>)\n\n"
+        "Усі повідомлення та скарги тепер маршрутизуються у відповідні гілки форуму, а чергування та обговорення залишаються в основному чаті!"
+    )
+
+
+# -------------------------------------------------------------
+# 0.1 Оголошення з будь-якої точки чату (/оголошення)
+# -------------------------------------------------------------
+
+@router.message(F.text.func(is_announcement_command) | F.caption.func(is_announcement_command))
+async def cmd_announcement(message: Message):
+    if message.chat.type not in ["group", "supergroup"]:
+        return
+
+    chat_id = message.chat.id
+    raw_text = (message.text or message.caption or "").strip()
+    is_cmd, announcement_text = parse_announcement_command(raw_text)
+
+    photo_id = message.photo[-1].file_id if message.photo else None
+    video_id = message.video.file_id if message.video else None
+
+    if message.reply_to_message:
+        if not announcement_text:
+            announcement_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+        if not photo_id and message.reply_to_message.photo:
+            photo_id = message.reply_to_message.photo[-1].file_id
+        if not video_id and message.reply_to_message.video:
+            video_id = message.reply_to_message.video.file_id
+
+    if not announcement_text.strip() and not photo_id and not video_id:
+        await message.reply(
+            "⚠️ <b>Оголошення порожнє.</b>\n"
+            "Введіть: <code>/оголошення [Текст оголошення]</code> (також можна прикріпити фото або відео)."
+        )
+        return
+
+    async with AsyncSessionLocal() as session:
+        coliving = await get_coliving_by_chat_id(session, chat_id)
+        if not coliving:
+            return
+
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        sender = message.from_user
+        sender_mention = f'<a href="tg://user?id={sender.id}">{sender.full_name}</a>' if sender else "Мешканець"
+        body = announcement_text or "<i>(Дивіться прикріплені медіа)</i>"
+
+        topic_post = (
+            f"📢 <b>ОГОЛОШЕННЯ</b>\n\n"
+            f"{body}\n\n"
+            f"✍️ <b>Автор:</b> {sender_mention}\n"
+            f"💬 <i>Обговорення оголошення відбувається в основному чаті!</i>"
+        )
+
+        if coliving.announcements_topic_id:
+            try:
+                if photo_id:
+                    await message.bot.send_photo(
+                        chat_id=chat_id,
+                        message_thread_id=coliving.announcements_topic_id,
+                        photo=photo_id,
+                        caption=topic_post
+                    )
+                elif video_id:
+                    await message.bot.send_video(
+                        chat_id=chat_id,
+                        message_thread_id=coliving.announcements_topic_id,
+                        video=video_id,
+                        caption=topic_post
+                    )
+                else:
+                    await message.bot.send_message(
+                        chat_id=chat_id,
+                        message_thread_id=coliving.announcements_topic_id,
+                        text=topic_post
+                    )
+            except Exception as e:
+                logger.warning(f"Error publishing to announcements topic: {e}")
+
+        general_post = (
+            f"📢 <b>НОВЕ ОГОЛОШЕННЯ</b>\n\n"
+            f"{body}\n\n"
+            f"✍️ <b>Автор:</b> {sender_mention}\n"
+            f"💬 <i>Тут ви можете обговорити та прокоментувати оголошення 👇</i>"
+        )
+        await send_to_general_chat(
+            bot=message.bot,
+            chat_id=chat_id,
+            text=general_post,
+            photo=photo_id,
+            video=video_id
+        )
+
+
+# -------------------------------------------------------------
+# 0.2 Довідка по командах чату (/help)
 # -------------------------------------------------------------
 
 @router.message(Command("help", "допомога"))
@@ -33,28 +468,31 @@ async def cmd_group_help(message: Message):
 
     help_text = (
         "📖 <b>Основні команди та можливості бота в чаті:</b>\n\n"
-        "📢 <b>Виклики та згадки:</b>\n"
+        "📢 <b>Оголошення та згадки:</b>\n"
+        "• <code>/оголошення [текст]</code> — створити офіційне оголошення в топік та чат\n"
         "• <code>@all</code> (або <code>/all</code>) — покликати всіх мешканців колівінгу\n"
         "• <code>@sotnik</code> (або <code>/sotnik</code>) — покликати сотників/адміністраторів\n"
         "• <code>@room1</code> (або <code>/room1</code>, <code>/кімната 1</code>) — покликати сусідів кімнати\n"
         "• <code>@duty</code> (або <code>/duty</code>, <code>/чергові</code>) — хто зараз чергує\n\n"
         "🚨 <b>Скарги та порядок:</b>\n"
-        "• <code>/скарга [текст]</code> — надіслати скаргу черговій кімнаті в ЛС та в топік\n"
+        "• <code>/скарга [текст]</code> — надіслати скаргу черговій кімнаті в ЛС та в топік «Скарги»\n"
         "• <code>/скарга @user [текст]</code> — надіслати скаргу конкретному мешканцю в ЛС\n"
         "• <code>/скарга</code> (у відповідь на повідомлення/фото) — поскаржитися на порушення\n"
-        "• <code>/чиї_речі [текст/фото]</code> (або реплаєм) — надіслати в топік «Чиї речі?»\n\n"
+        "• <code>/чиї_речі [текст/фото]</code> (або реплаєм) — надіслати в топік «Чиє?»\n\n"
         "🗓 <b>Інформація та графіки:</b>\n"
         "• <code>/calendar</code> (або <code>/графік</code>) — розклад чергувань по тижнях із датами\n"
         "• <code>/rooms</code> (або <code>/кімнати</code>) — список кімнат та їх жителів\n"
         "• <code>/rules</code> (або <code>/правила</code>) — правила та чекліст прибирання\n"
         "• <code>/fines</code> (або <code>/штрафи</code>) — скарбничка колівінгу та неоплачені штрафи\n\n"
-        "👑 <b>Для Сотника:</b>\n"
+        "👑 <b>Для Сотника та Адміністраторів:</b>\n"
+        "• <code>/create-topics</code> — автоматично створити топіки «Скарги», «Чиє?», «Оголошення»\n"
         "• <code>/штраф [сума] [причина]</code> (реплаєм на порушника) — виписати штраф\n"
         "• <code>/link_group [код]</code> — прив'язати чат до колівінгу\n"
-        "• <code>/link_topic [duty/complaints/lost_found]</code> — закріпити топік\n\n"
+        "• <code>/link_topic [duty/complaints/lost_found/announcements]</code> — закріпити топік\n\n"
         "🤖 <i>Також усі функції доступні в особистих повідомленнях з ботом через зручні кнопки меню!</i>"
     )
     await message.reply(help_text)
+
 
 # -------------------------------------------------------------
 # 1. Прив'язка групи та топіків
@@ -107,18 +545,22 @@ async def cmd_link_topics(message: Message):
         if "complaint" in text or "скарг" in text:
             await crud.update_coliving_topics(session, coliving.id, complaints_topic_id=topic_id)
             await message.reply(f"✅ Цей топік (ID: {topic_id}) встановлено як <b>Топік для скарг</b> 🚨!")
-        elif "lost" in text or "реч" in text or "found" in text:
+        elif "lost" in text or "реч" in text or "found" in text or "чиє" in text:
             await crud.update_coliving_topics(session, coliving.id, lost_found_topic_id=topic_id)
-            await message.reply(f"✅ Цей топік (ID: {topic_id}) встановлено як <b>Топік «Чиї речі?»</b> 📦!")
+            await message.reply(f"✅ Цей топік (ID: {topic_id}) встановлено як <b>Топік «Чиє?»</b> 📦!")
+        elif "announc" in text or "оголош" in text:
+            await crud.update_coliving_topics(session, coliving.id, announcements_topic_id=topic_id)
+            await message.reply(f"✅ Цей топік (ID: {topic_id}) встановлено як <b>Топік «Оголошення»</b> 📢!")
         elif "duty" in text or "чергув" in text:
             await crud.update_coliving_topics(session, coliving.id, duty_topic_id=topic_id)
             await message.reply(f"✅ Цей топік (ID: {topic_id}) встановлено як <b>Топік чергувань</b> 🧹!")
         else:
             await message.reply(
                 "ℹ️ <b>Як прив'язати конкретні топіки:</b>\n"
-                "• <code>/link_topic duty</code> — для топіку чергувань\n"
                 "• <code>/link_topic complaints</code> — для топіку скарг\n"
-                "• <code>/link_topic lost_found</code> — для топіку «Чиї речі?»"
+                "• <code>/link_topic lost_found</code> — для топіку «Чиє?»\n"
+                "• <code>/link_topic announcements</code> — для топіку оголошень\n"
+                "• <code>/link_topic duty</code> — для топіку чергувань"
             )
 
 

@@ -19,6 +19,7 @@ class Coliving(Base):
     duty_topic_id = Column(Integer, nullable=True)
     complaints_topic_id = Column(Integer, nullable=True)
     lost_found_topic_id = Column(Integer, nullable=True)
+    announcements_topic_id = Column(Integer, nullable=True)
     
     default_fine_amount = Column(Float, default=50.0)
     fine_distribution = Column(String(20), default="ROOM")  # "ROOM" or "INDIVIDUAL"

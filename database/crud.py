@@ -184,7 +184,8 @@ async def update_coliving_topics(
     coliving_id: int,
     duty_topic_id: Optional[int] = None,
     complaints_topic_id: Optional[int] = None,
-    lost_found_topic_id: Optional[int] = None
+    lost_found_topic_id: Optional[int] = None,
+    announcements_topic_id: Optional[int] = None
 ):
     values = {}
     if duty_topic_id is not None:
@@ -193,6 +194,8 @@ async def update_coliving_topics(
         values["complaints_topic_id"] = complaints_topic_id
     if lost_found_topic_id is not None:
         values["lost_found_topic_id"] = lost_found_topic_id
+    if announcements_topic_id is not None:
+        values["announcements_topic_id"] = announcements_topic_id
     if values:
         stmt = update(Coliving).where(Coliving.id == coliving_id).values(**values)
         await session.execute(stmt)

@@ -84,11 +84,17 @@ async def test_group_link_and_topic_linking():
     msg_complaints_topic.reply.assert_called_once()
     assert "Топік для скарг" in msg_complaints_topic.reply.call_args[0][0]
 
-    # 3. Прив'язка топіку "Чиї речі?"
+    # 3. Прив'язка топіку "Чиє?"
     msg_lost_found = make_mock_group_message(sotnik_tg, group_chat_id, "/link_topic речі", thread_id=30)
     await group_chat.cmd_link_topics(msg_lost_found)
     msg_lost_found.reply.assert_called_once()
-    assert "Топік «Чиї речі?»" in msg_lost_found.reply.call_args[0][0]
+    assert "Топік «Чиє?»" in msg_lost_found.reply.call_args[0][0]
+
+    # 4. Прив'язка топіку "Оголошення"
+    msg_announcements = make_mock_group_message(sotnik_tg, group_chat_id, "/link_topic оголошення", thread_id=40)
+    await group_chat.cmd_link_topics(msg_announcements)
+    msg_announcements.reply.assert_called_once()
+    assert "Топік «Оголошення»" in msg_announcements.reply.call_args[0][0]
 
     # Перевіряємо в БД
     async with AsyncSessionLocal() as session:
@@ -97,6 +103,7 @@ async def test_group_link_and_topic_linking():
         assert c.duty_topic_id == 10
         assert c.complaints_topic_id == 20
         assert c.lost_found_topic_id == 30
+        assert c.announcements_topic_id == 40
 
 
 @pytest.mark.asyncio
@@ -342,4 +349,165 @@ async def test_group_calendar_and_duty_hyperlinks():
     duty_text = msg_duty.reply.call_args[0][0]
     assert f'<a href="tg://user?id={resident_tg}">Марія Коваль</a>' in duty_text
     assert f'<a href="tg://user?id={sotnik_tg}">Олександр Сотник</a>' in duty_text
+
+
+@pytest.mark.asyncio
+async def test_create_topics_command():
+    """Тест створення топіків Скарги, Чиє?, Оголошення сотником."""
+    sotnik_tg = 9501
+    group_chat_id = -100778899
+
+    async with AsyncSessionLocal() as session:
+        col, _ = await crud.create_coliving_with_rooms(
+            session=session,
+            name="Колівінг Топіків",
+            address="вул. Топікова, 1",
+            total_people=4,
+            total_rooms=2,
+            creator_tg_id=sotnik_tg,
+            creator_name="Сотник Топіків"
+        )
+        await crud.link_group_to_coliving(session, col.id, group_chat_id)
+
+    msg = make_mock_group_message(sotnik_tg, group_chat_id, "/create-topics")
+    
+    # Мокаємо create_forum_topic
+    class MockForumTopic:
+        def __init__(self, thread_id: int):
+            self.message_thread_id = thread_id
+
+    mock_topics = [MockForumTopic(101), MockForumTopic(102), MockForumTopic(103)]
+    msg.bot.create_forum_topic = AsyncMock(side_effect=mock_topics)
+    status_edit_mock = AsyncMock()
+    msg.reply = AsyncMock(return_value=MagicMock(edit_text=status_edit_mock))
+
+    await group_chat.cmd_create_topics(msg)
+
+    # Перевіряємо, що було створено 3 топіки
+    assert msg.bot.create_forum_topic.call_count == 3
+    created_names = [call.kwargs.get("name") for call in msg.bot.create_forum_topic.call_args_list]
+    assert "🚨 Скарги" in created_names
+    assert "📦 Чиє?" in created_names
+    assert "📢 Оголошення" in created_names
+
+    # Перевіряємо оновлення в базі даних
+    async with AsyncSessionLocal() as session:
+        c = await crud.get_coliving_by_id(session, col.id)
+        assert c.complaints_topic_id == 101
+        assert c.lost_found_topic_id == 102
+        assert c.announcements_topic_id == 103
+
+    # Перевіряємо, що у кожний топік відправлено вітальний пост
+    sent_threads = [call.kwargs.get("message_thread_id") for call in msg.bot.send_message.call_args_list]
+    assert 101 in sent_threads
+    assert 102 in sent_threads
+    assert 103 in sent_threads
+    assert "Топіки успішно створено" in status_edit_mock.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_create_topics_permission_denied():
+    """Тест блокування виклику /create-topics звичайним мешканцем."""
+    sotnik_tg = 9601
+    resident_tg = 9602
+    group_chat_id = -100445566
+
+    async with AsyncSessionLocal() as session:
+        col, _ = await crud.create_coliving_with_rooms(
+            session=session,
+            name="Колівінг Права",
+            address="вул. Прав, 1",
+            total_people=4,
+            total_rooms=2,
+            creator_tg_id=sotnik_tg,
+            creator_name="Сотник Головний"
+        )
+        rooms = await crud.get_rooms_with_users(session, col.id)
+        await crud.create_user(
+            session=session,
+            tg_id=resident_tg,
+            full_name="Звичайний Мешканець",
+            coliving_id=col.id,
+            room_id=rooms[0].id,
+            is_approved=True
+        )
+        await crud.link_group_to_coliving(session, col.id, group_chat_id)
+
+    msg = make_mock_group_message(resident_tg, group_chat_id, "/create-topics")
+    msg.bot.get_chat_member = AsyncMock(return_value=MagicMock(status="member"))
+    await group_chat.cmd_create_topics(msg)
+    msg.reply.assert_called_once()
+    assert "Тільки Сотник" in msg.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_announcements_topic_guard_and_publishing():
+    """Тест правил топіку Оголошення: видалення не-команд, порожніх та успішна публікація."""
+    sotnik_tg = 9701
+    resident_tg = 9702
+    group_chat_id = -100112233
+    announcements_thread = 555
+
+    async with AsyncSessionLocal() as session:
+        col, _ = await crud.create_coliving_with_rooms(
+            session=session,
+            name="Колівінг Оголошень",
+            address="вул. Анонсів, 1",
+            total_people=4,
+            total_rooms=2,
+            creator_tg_id=sotnik_tg,
+            creator_name="Сотник Анонс"
+        )
+        await crud.link_group_to_coliving(session, col.id, group_chat_id)
+        await crud.update_coliving_topics(session, col.id, announcements_topic_id=announcements_thread)
+        c = await crud.get_coliving_by_id(session, col.id)
+
+    # 1. Повідомлення БЕЗ команди /оголошення всередині топіку -> видаляється + попередження
+    msg_chat = make_mock_group_message(resident_tg, group_chat_id, "Хто позичить цукор?", thread_id=announcements_thread)
+    msg_chat.delete = AsyncMock()
+    warn_mock = MagicMock(message_id=777)
+    msg_chat.answer = AsyncMock(return_value=warn_mock)
+
+    await group_chat.handle_announcements_topic_message(msg_chat, c)
+    msg_chat.delete.assert_called_once()
+    msg_chat.answer.assert_called_once()
+    assert "Для створення оголошення напишіть команду /оголошення" in msg_chat.answer.call_args[0][0]
+
+    # 2. Порожня команда /оголошення -> видаляється + попередження
+    msg_empty = make_mock_group_message(resident_tg, group_chat_id, "/оголошення", thread_id=announcements_thread)
+    msg_empty.delete = AsyncMock()
+    msg_empty.answer = AsyncMock(return_value=warn_mock)
+
+    await group_chat.handle_announcements_topic_message(msg_empty, c)
+    msg_empty.delete.assert_called_once()
+    msg_empty.answer.assert_called_once()
+    assert "Оголошення порожнє" in msg_empty.answer.call_args[0][0]
+
+    # 3. Валідне оголошення -> видаляється команда, публікується в топік та дублюється в основний чат
+    msg_valid = make_mock_group_message(
+        resident_tg,
+        group_chat_id,
+        "/оголошення Сьогодні о 20:00 дивимось фільм на кухні!",
+        thread_id=announcements_thread
+    )
+    msg_valid.delete = AsyncMock()
+    await group_chat.handle_announcements_topic_message(msg_valid, c)
+    msg_valid.delete.assert_called_once()
+
+    # Перевіряємо, що опубліковано в топік "Оголошення"
+    topic_call = next(
+        call for call in msg_valid.bot.send_message.call_args_list
+        if call.kwargs.get("message_thread_id") == announcements_thread
+    )
+    assert "Сьогодні о 20:00 дивимось фільм на кухні!" in topic_call.kwargs.get("text")
+    assert f'<a href="tg://user?id={resident_tg}">' in topic_call.kwargs.get("text")
+
+    # Перевіряємо дублювання в основний чат (message_thread_id=None або відсутній)
+    general_call = next(
+        call for call in msg_valid.bot.send_message.call_args_list
+        if not call.kwargs.get("message_thread_id") or call.kwargs.get("message_thread_id") == 1
+    )
+    assert "НОВЕ ОГОЛОШЕННЯ" in general_call.kwargs.get("text")
+    assert "Сьогодні о 20:00 дивимось фільм на кухні!" in general_call.kwargs.get("text")
+
 
